@@ -1,0 +1,283 @@
+import { Dialog, Transition } from "@headlessui/react";
+import {
+  ArrowRightLeft,
+  Download,
+  FileText,
+  LoaderCircle,
+  Sparkles
+} from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
+import { useParams } from "react-router-dom";
+
+import {
+  LAST_AUDIT_STORAGE_KEY,
+  downloadReport,
+  getAudit,
+  mitigateAudit
+} from "../api/fairlensApi";
+import MetricComparisonTable from "../components/MetricComparisonTable";
+import Spinner from "../components/Spinner";
+
+const metricLabels = {
+  disparate_impact: "Disparate Impact",
+  stat_parity_diff: "Statistical Parity Difference",
+  equal_opp_diff: "Equal Opportunity Difference",
+  avg_odds_diff: "Average Odds Difference"
+};
+
+function MetricProgress({ label, beforeValue, afterValue }) {
+  const normalisedAfter = Math.min(100, Math.round(Math.abs(afterValue) * 100));
+  const delta = Number(afterValue) - Number(beforeValue);
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-sm font-semibold text-slate-800">{label}</p>
+        <p className="text-sm font-medium text-slate-500">
+          {Number(beforeValue).toFixed(2)} → {Number(afterValue).toFixed(2)}
+        </p>
+      </div>
+      <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className="h-full rounded-full bg-[linear-gradient(90deg,#f59e0b_0%,#16a34a_100%)] transition-all duration-[1500ms]"
+          style={{ width: `${normalisedAfter}%` }}
+        />
+      </div>
+      <p className="mt-3 text-sm font-medium text-slate-500">
+        {delta >= 0 ? "+" : ""}
+        {delta.toFixed(2)} change after mitigation
+      </p>
+    </div>
+  );
+}
+
+function Mitigate() {
+  const { auditId } = useParams();
+  const [audit, setAudit] = useState(null);
+  const [result, setResult] = useState(null);
+  const [loadingAudit, setLoadingAudit] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    if (auditId) {
+      localStorage.setItem(LAST_AUDIT_STORAGE_KEY, auditId);
+    }
+  }, [auditId]);
+
+  useEffect(() => {
+    const fetchAudit = async () => {
+      setLoadingAudit(true);
+      try {
+        const data = await getAudit(auditId);
+        setAudit(data);
+      } catch (error) {
+        setAudit(null);
+      } finally {
+        setLoadingAudit(false);
+      }
+    };
+
+    fetchAudit();
+  }, [auditId]);
+
+  const handleRunMitigation = async () => {
+    setRunning(true);
+    try {
+      const response = await mitigateAudit(auditId);
+      setResult(response);
+    } catch (error) {
+      return;
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const handleDownloadReport = async () => {
+    try {
+      const blob = await downloadReport(auditId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${audit?.dataset_name?.replace(".csv", "") || "fairlens"}_report.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      return;
+    }
+  };
+
+  const fairnessLift = useMemo(() => {
+    if (!result) {
+      return 0;
+    }
+    return Math.round(result.fairness_score_after - result.fairness_score_before);
+  }, [result]);
+
+  if (loadingAudit) {
+    return (
+      <div className="section-card flex min-h-[320px] items-center justify-center">
+        <Spinner className="h-8 w-8 text-navy" />
+      </div>
+    );
+  }
+
+  if (!audit) {
+    return (
+      <div className="section-card flex min-h-[360px] flex-col items-center justify-center text-center">
+        <FileText className="h-10 w-10 text-slate-300" />
+        <h2 className="mt-5 text-3xl font-bold text-slate-900">No audit found</h2>
+        <p className="mt-3 max-w-xl text-sm leading-7 text-slate-500">
+          Open this page from an existing audit or upload a new dataset to run mitigation analysis.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="section-card overflow-hidden bg-[linear-gradient(135deg,#0f172a_0%,#1e293b_50%,#f59e0b_120%)] text-white">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-light">Mitigation Center</p>
+            <h1 className="mt-4 text-4xl font-extrabold">Compare mitigation strategies before rollout</h1>
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">
+              Run reweighing, prejudice remover, and equalized odds post-processing against{" "}
+              <span className="font-semibold text-white">{audit.dataset_name}</span> to understand
+              how fairness metrics shift before rankings are refreshed.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleRunMitigation}
+            disabled={running}
+            className="inline-flex items-center justify-center gap-3 rounded-3xl bg-white px-6 py-4 text-sm font-semibold text-navy transition hover:bg-amber/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {running ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
+            {running ? "Applying 3 mitigation strategies..." : "Run Mitigation Analysis"}
+          </button>
+        </div>
+      </div>
+
+      {!result && (
+        <div className="section-card text-center">
+          <h2 className="text-2xl font-bold text-slate-900">Mitigation analysis has not been run yet</h2>
+          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-500 mx-auto">
+            Start the mitigation workflow to compute before-and-after fairness metrics, update
+            candidate ranking decisions, and enable PDF report export.
+          </p>
+        </div>
+      )}
+
+      {result && (
+        <>
+          <MetricComparisonTable data={result} />
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {Object.entries(metricLabels).map(([key, label]) => (
+              <MetricProgress
+                key={key}
+                label={label}
+                beforeValue={result.original[key]}
+                afterValue={result.after_equalized_odds[key]}
+              />
+            ))}
+          </div>
+
+          <div className="section-card">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-dark">Impact Summary</p>
+                <h3 className="mt-2 text-2xl font-bold text-slate-900">
+                  Mitigation improved fairness score by {fairnessLift}%
+                </h3>
+                <p className="mt-3 text-sm leading-7 text-slate-600">
+                  Candidate decisions updated for {result.mitigated_candidates} records. You can now
+                  export a stakeholder-ready PDF or confirm the recalculated rankings.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleDownloadReport}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-amber hover:text-amber-dark"
+                >
+                  <Download className="h-4 w-4" />
+                  Download PDF Report
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowModal(true)}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-navy px-4 py-3 text-sm font-semibold text-white transition hover:bg-navy-light"
+                >
+                  <ArrowRightLeft className="h-4 w-4" />
+                  Apply to Rankings
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      <Transition.Root show={showModal} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={setShowModal}>
+          <Transition.Child
+            as={Fragment}
+            enter="transition-opacity duration-200"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="transition-opacity duration-150"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" />
+          </Transition.Child>
+
+          <div className="fixed inset-0 flex items-center justify-center p-4">
+            <Transition.Child
+              as={Fragment}
+              enter="transform transition duration-200"
+              enterFrom="scale-95 opacity-0"
+              enterTo="scale-100 opacity-100"
+              leave="transform transition duration-150"
+              leaveFrom="scale-100 opacity-100"
+              leaveTo="scale-95 opacity-0"
+            >
+              <Dialog.Panel className="w-full max-w-lg rounded-[32px] bg-white p-8 shadow-2xl">
+                <Dialog.Title className="text-2xl font-bold text-slate-900">
+                  Recalculated decisions are ready
+                </Dialog.Title>
+                <p className="mt-4 text-sm leading-7 text-slate-600">
+                  Equalized odds mitigation has already updated the stored mitigated decisions for this
+                  audit. Confirming here lets your team proceed with the adjusted rankings confidently.
+                </p>
+                <div className="mt-8 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toast.success("Mitigated rankings confirmed for this audit.");
+                      setShowModal(false);
+                    }}
+                    className="flex-1 rounded-2xl bg-navy px-4 py-3 text-sm font-semibold text-white"
+                  >
+                    Confirm Rankings
+                  </button>
+                </div>
+              </Dialog.Panel>
+            </Transition.Child>
+          </div>
+        </Dialog>
+      </Transition.Root>
+    </div>
+  );
+}
+
+export default Mitigate;
