@@ -1,11 +1,15 @@
 import { Dialog, Transition } from "@headlessui/react";
 import {
-  Bot,
+  AlertTriangle,
   ArrowRightLeft,
+  BadgeCheck,
+  Bot,
   Download,
   FileText,
   LoaderCircle,
-  Sparkles
+  Sparkles,
+  TrendingUp,
+  XCircle
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
@@ -27,6 +31,57 @@ const metricLabels = {
   equal_opp_diff: "Equal Opportunity Difference",
   avg_odds_diff: "Average Odds Difference"
 };
+
+const metricThresholds = {
+  disparate_impact: "> 0.80",
+  stat_parity_diff: "|x| < 0.10",
+  equal_opp_diff: "|x| < 0.10",
+  avg_odds_diff: "|x| < 0.10"
+};
+
+function buildMitigationSummary(result) {
+  if (!result) {
+    return null;
+  }
+
+  const passFlags = result.after_equalized_odds?.pass_flags || {};
+  const passCount = Object.values(passFlags).filter(Boolean).length;
+
+  if (passCount === 4) {
+    return {
+      badge: "Audit Pass",
+      badgeClass: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      title: "Mitigation brought the audit into the target range.",
+      description:
+        "All fairness checks now pass after the final mitigation stage, so this audit is in much stronger shape for rollout review and stakeholder sign-off.",
+      tone: "border-emerald-200 bg-emerald-50/60"
+    };
+  }
+
+  if (passCount >= 2) {
+    return {
+      badge: "Improved, Still Open",
+      badgeClass: "border-amber-200 bg-amber-50 text-amber-800",
+      title: "Mitigation helped, but there are still open fairness gaps.",
+      description:
+        "Several checks moved into range, but the remaining failing metrics should be reviewed before the model is treated as fully clean.",
+      tone: "border-amber-200 bg-amber-50/60"
+    };
+  }
+
+  return {
+    badge: "Needs More Work",
+    badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
+    title: "Mitigation reduced risk only slightly.",
+    description:
+      "Most fairness checks are still failing after mitigation, so the ranking model should stay under review before production use.",
+    tone: "border-rose-200 bg-rose-50/60"
+  };
+}
+
+function formatMetricValue(value) {
+  return Number(value ?? 0).toFixed(4);
+}
 
 function MetricProgress({ label, beforeValue, afterValue }) {
   const normalisedAfter = Math.min(100, Math.round(Math.abs(afterValue) * 100));
@@ -88,6 +143,7 @@ function Mitigate() {
 
   const handleRunMitigation = async () => {
     setRunning(true);
+    setAgentDecision(null);
     try {
       const response = await mitigateAudit(auditId);
       setResult(response);
@@ -101,6 +157,7 @@ function Mitigate() {
         setLoadingAgentDecision(false);
       }
     } catch (error) {
+      setLoadingAgentDecision(false);
       return;
     } finally {
       setRunning(false);
@@ -127,6 +184,47 @@ function Mitigate() {
     }
     return Number((result.fairness_score_after - result.fairness_score_before).toFixed(1));
   }, [result]);
+
+  const mitigationSummary = useMemo(() => buildMitigationSummary(result), [result]);
+
+  const passingMetrics = useMemo(
+    () =>
+      Object.entries(result?.after_equalized_odds?.pass_flags || {})
+        .filter(([, passed]) => passed)
+        .map(([key]) => ({
+          key,
+          label: metricLabels[key],
+          value: result.after_equalized_odds[key],
+          threshold: metricThresholds[key]
+        })),
+    [result]
+  );
+
+  const failingMetrics = useMemo(
+    () =>
+      Object.entries(result?.after_equalized_odds?.pass_flags || {})
+        .filter(([, passed]) => !passed)
+        .map(([key]) => ({
+          key,
+          label: metricLabels[key],
+          value: result.after_equalized_odds[key],
+          threshold: metricThresholds[key]
+        })),
+    [result]
+  );
+
+  const summaryHeadline = useMemo(() => {
+    if (!result) {
+      return "";
+    }
+    if (fairnessLiftPoints > 0) {
+      return `Mitigation improved fairness score by ${Math.abs(fairnessLiftPoints)} points`;
+    }
+    if (fairnessLiftPoints < 0) {
+      return `Mitigation reduced fairness score by ${Math.abs(fairnessLiftPoints)} points`;
+    }
+    return "Mitigation kept the fairness score level";
+  }, [fairnessLiftPoints, result]);
 
   if (loadingAudit) {
     return (
@@ -176,14 +274,14 @@ function Mitigate() {
       {!result && (
         <div className="section-card text-center">
           <h2 className="text-2xl font-bold text-slate-900">Mitigation analysis has not been run yet</h2>
-          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-500 mx-auto">
+          <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-slate-500">
             Start the mitigation workflow to compute before-and-after fairness metrics, update
             candidate ranking decisions, and enable PDF report export.
           </p>
         </div>
       )}
 
-      {result && (
+      {result && mitigationSummary && (
         <>
           <div className="section-card border border-indigo-200 bg-indigo-50/60">
             <div className="flex items-start gap-4">
@@ -224,13 +322,86 @@ function Mitigate() {
             ))}
           </div>
 
-          <div className="section-card">
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+            <div className={`section-card border ${mitigationSummary.tone}`}>
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span
+                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${mitigationSummary.badgeClass}`}
+                  >
+                    {mitigationSummary.badge}
+                  </span>
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    <TrendingUp className="h-3.5 w-3.5 text-amber-dark" />
+                    Fairness score {result.fairness_score_before}% → {result.fairness_score_after}%
+                  </span>
+                  <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    {passingMetrics.length} of {Object.keys(metricLabels).length} checks in range
+                  </span>
+                </div>
+
+                <div>
+                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-dark">Mitigation Readout</p>
+                  <h3 className="mt-2 text-3xl font-bold text-slate-900">{mitigationSummary.title}</h3>
+                  <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
+                    {mitigationSummary.description}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-4 lg:grid-cols-2">
+                <div className="rounded-3xl border border-emerald-200 bg-white p-5">
+                  <div className="flex items-center gap-3">
+                    <BadgeCheck className="h-5 w-5 text-emerald-600" />
+                    <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                      Passing Checks
+                    </p>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {passingMetrics.length ? (
+                      passingMetrics.map((metric) => (
+                        <div key={metric.key} className="rounded-2xl bg-emerald-50 px-4 py-3">
+                          <p className="text-sm font-semibold text-slate-900">{metric.label}</p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            {formatMetricValue(metric.value)} • threshold {metric.threshold}
+                          </p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-500">No fairness checks are passing yet.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-rose-200 bg-white p-5">
+                  <div className="flex items-center gap-3">
+                    <XCircle className="h-5 w-5 text-rose-600" />
+                    <p className="text-sm font-semibold uppercase tracking-[0.16em] text-rose-700">
+                      Remaining Gaps
+                    </p>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {failingMetrics.length ? (
+                      failingMetrics.map((metric) => (
+                        <div key={metric.key} className="rounded-2xl bg-rose-50 px-4 py-3">
+                          <p className="text-sm font-semibold text-slate-900">{metric.label}</p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            {formatMetricValue(metric.value)} • threshold {metric.threshold}
+                          </p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-500">No remaining fairness gaps in the final metric set.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="section-card">
               <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-dark">Impact Summary</p>
-                <h3 className="mt-2 text-2xl font-bold text-slate-900">
-                  Mitigation shifted fairness score by {Math.abs(fairnessLiftPoints)} points
-                </h3>
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-dark">Decision Summary</p>
+                <h3 className="mt-2 text-2xl font-bold text-slate-900">{summaryHeadline}</h3>
                 <p className="mt-3 text-sm leading-7 text-slate-600">
                   {result.mitigated_candidates > 0
                     ? `Model recommendations updated for ${result.mitigated_candidates} records.`
@@ -238,7 +409,29 @@ function Mitigate() {
                   You can now export a stakeholder-ready PDF or confirm the recalculated rankings.
                 </p>
               </div>
-              <div className="flex flex-wrap gap-3">
+
+              <div
+                className={`mt-6 rounded-3xl border p-4 ${
+                  failingMetrics.length
+                    ? "border-amber-200 bg-amber-50"
+                    : "border-emerald-200 bg-emerald-50"
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  {failingMetrics.length ? (
+                    <AlertTriangle className="mt-0.5 h-5 w-5 text-amber-dark" />
+                  ) : (
+                    <BadgeCheck className="mt-0.5 h-5 w-5 text-emerald-600" />
+                  )}
+                  <p className="text-sm leading-7 text-slate-600">
+                    {failingMetrics.length
+                      ? "The strongest remaining concerns are the metrics still outside the accepted range after equalized odds. Review those before calling the audit clean."
+                      : "The final metric set is fully inside the target range, so this audit is ready for a cleaner stakeholder handoff."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 flex flex-wrap gap-3">
                 <button
                   type="button"
                   onClick={handleDownloadReport}

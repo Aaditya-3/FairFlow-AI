@@ -138,26 +138,26 @@ function Dashboard() {
     () => [
       {
         label: "Latest Dataset",
-        value: latestAudit?.dataset_name || "No dataset yet",
-        compact: true,
+        value: latestAudit?.dataset_name?.replace(/\.csv$/i, "") || "No dataset yet",
+        valueClassName: "text-base leading-6 xl:text-lg break-words",
         title: latestAudit?.dataset_name || "No dataset yet"
       },
       {
         label: "Latest Score",
         value: latestAudit ? `${Math.round(latestAudit.fairness_score)} / 100` : "0 / 100",
-        compact: false,
+        valueClassName: "text-2xl xl:text-3xl leading-tight",
         title: latestAudit ? `${Math.round(latestAudit.fairness_score)} / 100` : "0 / 100"
       },
       {
         label: "Flagged Candidates",
         value: latestAudit?.flagged_candidates ?? 0,
-        compact: false,
+        valueClassName: "text-2xl xl:text-3xl leading-tight",
         title: String(latestAudit?.flagged_candidates ?? 0)
       },
       {
         label: "Mitigation",
         value: latestAudit?.mitigation_applied ? "Applied" : "Pending",
-        compact: false,
+        valueClassName: "text-2xl xl:text-3xl leading-tight",
         title: latestAudit?.mitigation_applied ? "Applied" : "Pending"
       }
     ],
@@ -192,7 +192,7 @@ function Dashboard() {
   return (
     <div className="space-y-6">
       <div className="section-card overflow-hidden bg-[linear-gradient(135deg,#0f172a_0%,#1e293b_55%,#334155_100%)] text-white">
-        <div className="grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+        <div className="grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_minmax(420px,0.85fr)]">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-amber-light">Operations Pulse</p>
             <h1 className="mt-4 text-4xl font-extrabold leading-tight">
@@ -205,14 +205,12 @@ function Dashboard() {
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {heroStats.map((item) => (
-              <div key={item.label} className="min-w-0 rounded-3xl border border-white/10 bg-white/5 p-5">
+              <div
+                key={item.label}
+                className="min-w-0 rounded-3xl border border-white/10 bg-white/5 p-5 min-h-[132px]"
+              >
                 <p className="text-xs uppercase tracking-[0.18em] text-slate-400">{item.label}</p>
-                <p
-                  className={`mt-3 font-bold text-white ${
-                    item.compact ? "truncate text-lg xl:text-xl" : "text-xl xl:text-2xl"
-                  }`}
-                  title={item.title}
-                >
+                <p className={`mt-4 font-bold text-white ${item.valueClassName}`} title={item.title}>
                   {item.value}
                 </p>
               </div>

@@ -1,6 +1,6 @@
-# FairLens AI
+# FairFlow AI
 
-FairLens AI is a full-stack bias detection and mitigation platform for hiring systems. It lets teams upload hiring outcome datasets, measure fairness risks, inspect candidate-level SHAP explanations, run counterfactual bias checks, compare mitigation strategies, and export audit-ready PDF reports.
+FairFlow AI is a full-stack bias detection and mitigation platform for hiring systems. It lets teams upload hiring outcome datasets, measure fairness risks, inspect candidate-level SHAP explanations, run counterfactual bias checks, compare mitigation strategies, and export audit-ready PDF reports.
 
 ## Features
 
@@ -28,7 +28,7 @@ FairLens AI is a full-stack bias detection and mitigation platform for hiring sy
 ## Project Structure
 
 ```text
-FairLens AI/
+FairFlow AI/
 ├── backend/
 ├── frontend/
 ├── sample_candidates.csv
@@ -76,9 +76,9 @@ npm start
 `npm run build:wasm` generates `frontend/public/wasm/ethos_core.js` and `frontend/public/wasm/ethos_core.wasm`.  
 If this step is skipped, the app automatically falls back to a JS runtime for the local precheck.
 
-WASM technical notes: [`docs/ethos-wasm-core.md`](/Users/akshatagrawal/Desktop/FairFlow-AI/docs/ethos-wasm-core.md)
-Ethos architecture notes: [`docs/ethos-architecture.md`](/Users/akshatagrawal/Desktop/FairFlow-AI/docs/ethos-architecture.md)
-Compliance mapping: [`docs/ethos-compliance.md`](/Users/akshatagrawal/Desktop/FairFlow-AI/docs/ethos-compliance.md)
+WASM technical notes: [docs/ethos-wasm-core.md](docs/ethos-wasm-core.md)
+Ethos architecture notes: [docs/ethos-architecture.md](docs/ethos-architecture.md)
+Compliance mapping: [docs/ethos-compliance.md](docs/ethos-compliance.md)
 
 6. If you want to run the backend directly instead of the containerized backend, create a virtual environment and install dependencies.
 
@@ -113,7 +113,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES=30
 
 ## Sample Dataset
 
-The repository includes [sample_candidates.csv](/Users/akshatagrawal/Desktop/FairFlow-AI/sample_candidates.csv) with 200 seeded records containing intentional hiring bias patterns across gender and ethnicity so you can validate the full workflow immediately.
+The repository includes [sample_candidates.csv](sample_candidates.csv) with 200 seeded records containing intentional hiring bias patterns across gender and ethnicity so you can validate the full workflow immediately.
 
 ## API Endpoints
 
@@ -131,7 +131,7 @@ curl -X POST http://localhost:8000/auth/register \
   -d '{
     "email": "admin@fairlens.ai",
     "password": "SecurePass123",
-    "organization": "FairLens Labs"
+    "organization": "FairFlow Labs"
   }'
 ```
 
