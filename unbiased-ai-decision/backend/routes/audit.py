@@ -8,8 +8,9 @@ from uuid import uuid4
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from firebase_admin import firestore
 
-from firebase_config import require_firestore
+from firebase_config import db, require_firestore
 from gemini_explainer import generate_explanation
+from local_store import get_local_audit, list_local_audits_for_user
 from models.audit_result import AuditResult, FairnessMetrics
 from vertex_pipeline import run_bias_analysis, store_audit_result
 
@@ -107,11 +108,16 @@ async def create_audit(
 
 @router.get("/audit/{audit_id}", response_model=AuditResult)
 def get_audit(audit_id: str):
-    snapshot = require_firestore().collection("audits").document(audit_id).get()
-    if not snapshot.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found.")
+    if db is None:
+        payload = get_local_audit(audit_id)
+        if payload is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found.")
+    else:
+        snapshot = require_firestore().collection("audits").document(audit_id).get()
+        if not snapshot.exists:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found.")
+        payload = _serialize_firestore_payload(snapshot.to_dict() or {}, snapshot.id)
 
-    payload = _serialize_firestore_payload(snapshot.to_dict() or {}, snapshot.id)
     return AuditResult(
         audit_id=payload["audit_id"],
         user_id=payload["user_id"],
@@ -135,6 +141,9 @@ def get_audit(audit_id: str):
 
 @router.get("/audit/history/{user_id}")
 def get_audit_history(user_id: str):
+    if db is None:
+        return list_local_audits_for_user(user_id, limit=20)
+
     docs = (
         require_firestore()
         .collection("audits")

@@ -55,6 +55,23 @@ class ApiService {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
+  Future<List<Map<String, dynamic>>> fetchAuditHistory(String userId) async {
+    final response = await http.get(Uri.parse('$baseUrl/audit/history/$userId'));
+    if (response.statusCode >= 400) {
+      throw Exception(response.body);
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! List) {
+      throw Exception('Unexpected audit history response.');
+    }
+
+    return decoded
+        .whereType<Map>()
+        .map((item) => item.cast<String, dynamic>())
+        .toList(growable: false);
+  }
+
   Future<http.MultipartFile> _buildFile(String fieldName, PlatformFile file) async {
     if (file.bytes != null) {
       return http.MultipartFile.fromBytes(

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
-from firebase_config import require_firestore
+from firebase_config import db, require_firestore
+from local_store import save_local_audit
 
 
 SAMPLE_AUDIT = {
@@ -53,8 +56,16 @@ SAMPLE_AUDIT = {
 
 
 def seed_sample_audit():
-    db = require_firestore()
-    db.collection("audits").document("sample_hiring_audit").set(SAMPLE_AUDIT)
+    if db is None:
+        local_payload = {
+            **SAMPLE_AUDIT,
+            "created_at": datetime.now(timezone.utc),
+        }
+        save_local_audit("sample_hiring_audit", local_payload)
+        return "sample_hiring_audit"
+
+    firestore_client = require_firestore()
+    firestore_client.collection("audits").document("sample_hiring_audit").set(SAMPLE_AUDIT)
     return "sample_hiring_audit"
 
 

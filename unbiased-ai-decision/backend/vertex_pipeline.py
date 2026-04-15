@@ -4,12 +4,14 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from google.cloud import aiplatform
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
 from bias_analyzer import analyze_bias
-from firebase_config import require_firestore
+from firebase_config import db, require_firestore
+from local_store import save_local_audit
 
 
 def vertex_status() -> str:
@@ -75,29 +77,38 @@ def run_bias_analysis(dataset_path: str, model_artifact_path: str | None = None)
 
 
 def store_audit_result(user_id: str, result_dict: dict[str, Any]) -> str:
-    db = require_firestore()
-    collection = db.collection("audits")
+    payload = {
+        "user_id": user_id,
+        "model_name": result_dict.get("model_name", "Unnamed Model"),
+        "dataset_name": result_dict.get("dataset_name", "uploaded_dataset.csv"),
+        "bias_score": result_dict.get("bias_score", 0),
+        "fairness_metrics": result_dict.get("fairness_metrics", {}),
+        "shap_values": result_dict.get("shap_values", []),
+        "shap_top3": result_dict.get("shap_top3", []),
+        "causal_graph_json": result_dict.get("causal_graph_json", {}),
+        "causal_pathway": result_dict.get("causal_pathway", ""),
+        "demographic_parity": result_dict.get("demographic_parity", 0),
+        "equalized_odds": result_dict.get("equalized_odds", 0),
+        "individual_fairness": result_dict.get("individual_fairness", 0),
+        "calibration_error": result_dict.get("calibration_error", 0),
+        "sdg_tag": "SDG 10.3",
+        "gemini_explanation": result_dict.get("gemini_explanation", ""),
+        "status": result_dict.get("status", "completed"),
+        "vertex_job_name": result_dict.get("vertex_job_name"),
+    }
+
+    if db is None:
+        document_id = f"local-{uuid4()}"
+        payload["created_at"] = datetime.now(timezone.utc)
+        return save_local_audit(document_id, payload)
+
+    firestore_client = require_firestore()
+    collection = firestore_client.collection("audits")
     document_reference = collection.document()
     document_reference.set(
         {
-            "user_id": user_id,
-            "model_name": result_dict.get("model_name", "Unnamed Model"),
-            "dataset_name": result_dict.get("dataset_name", "uploaded_dataset.csv"),
-            "bias_score": result_dict.get("bias_score", 0),
-            "fairness_metrics": result_dict.get("fairness_metrics", {}),
-            "shap_values": result_dict.get("shap_values", []),
-            "shap_top3": result_dict.get("shap_top3", []),
-            "causal_graph_json": result_dict.get("causal_graph_json", {}),
-            "causal_pathway": result_dict.get("causal_pathway", ""),
-            "demographic_parity": result_dict.get("demographic_parity", 0),
-            "equalized_odds": result_dict.get("equalized_odds", 0),
-            "individual_fairness": result_dict.get("individual_fairness", 0),
-            "calibration_error": result_dict.get("calibration_error", 0),
-            "sdg_tag": "SDG 10.3",
-            "gemini_explanation": result_dict.get("gemini_explanation", ""),
+            **payload,
             "created_at": SERVER_TIMESTAMP,
-            "status": result_dict.get("status", "completed"),
-            "vertex_job_name": result_dict.get("vertex_job_name"),
         }
     )
     return document_reference.id

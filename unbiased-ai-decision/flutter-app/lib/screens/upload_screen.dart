@@ -1,12 +1,12 @@
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
 
-import '../theme/app_theme.dart';
 import '../services/api_service.dart';
+import '../services/auth_service.dart';
+import '../theme/app_theme.dart';
 import 'report_screen.dart';
 
 class UploadScreen extends StatefulWidget {
@@ -45,8 +45,8 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<void> _runAudit() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (_datasetFile == null || user == null) {
+    final session = AuthService.instance.currentSession;
+    if (_datasetFile == null || session == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Choose a CSV and sign in first.')),
       );
@@ -61,7 +61,7 @@ class _UploadScreenState extends State<UploadScreen> {
         modelName: _modelNameController.text.trim().isEmpty
             ? 'Uploaded Decision Model'
             : _modelNameController.text.trim(),
-        userId: user.uid,
+        userId: session.uid,
       );
       if (!mounted) return;
       Navigator.of(context).pushReplacement(

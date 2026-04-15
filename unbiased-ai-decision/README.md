@@ -12,37 +12,48 @@ AI fairness auditing for automated decisions in hiring, lending, and care delive
 ![SHAP](https://img.shields.io/badge/SHAP-Explainability-EF4444?style=for-the-badge)
 ![Causal AI](https://img.shields.io/badge/Causal%20AI-Enabled-111827?style=for-the-badge)
 
-## SDG Target 10.3 — Equal Opportunity
+## SDG Target 10.3
 
-Primary alignment: **SDG 10 — Reduced Inequalities**
-Target 10.3 — **Ensure equal opportunity and reduce inequalities of outcome, including by eliminating discriminatory laws, policies, and practices**
+Primary alignment: **SDG 10 - Reduced Inequalities**  
+Target 10.3: **Ensure equal opportunity and reduce inequalities of outcome, including by eliminating discriminatory practices**
 
-## Live Demo
+## Evidence Checklist
 
-- Backend target URL: [https://your-cloud-run-url.run.app](https://your-cloud-run-url.run.app)
-- Flutter web target URL: [https://your-cloud-run-url.run.app](https://your-cloud-run-url.run.app)
+- Google tech integration: Firebase Auth, Firestore, Vertex AI, and Gemini integration are implemented in `backend/` and `flutter-app/`
+- Flutter mobile app: the product is a Flutter mobile/web app in [`flutter-app/`](flutter-app)
+- Demo-ready guest mode: the app supports Firebase anonymous sign-in first and now falls back to a local guest session plus local sample audit if demo Firebase services are unavailable
+- 3 documented user tests: see [`user-tests/test_1_recruiter_tool.md`](user-tests/test_1_recruiter_tool.md), [`user-tests/test_2_loan_model.md`](user-tests/test_2_loan_model.md), and [`user-tests/test_3_medical_triage.md`](user-tests/test_3_medical_triage.md)
+- SDG target cited by number: SDG 10.3 is surfaced in the UI, backend payloads, and documentation
+- Community impact story: see [`IMPACT_STORY.md`](IMPACT_STORY.md)
+- Problem statement video: the script is included in [`video_script.md`](video_script.md)
+- Docker reproducibility: see [`docker/docker-compose.yml`](docker/docker-compose.yml)
+- Deployment scaffold: Cloud Run deployment commands are included below
+- Technical depth: SHAP, fairness metrics, causal graph generation, and Gemini plain-language summaries are all present
 
-## Try The Demo
+## Demo Modes
 
-1. Open the Flutter app.
-2. Tap **Try as Guest — no sign-up needed**.
-3. The app signs in with Firebase Anonymous Authentication.
-4. It immediately loads Firestore document `sample_hiring_audit`.
-5. Open the report to review the Gemini explanation, SHAP feature impact, and SDG 10.3 badge.
+### Local demo
 
-## Project Structure
+- Backend: `http://localhost:8080`
+- Flutter web: `http://localhost:3000`
+- Health check: `http://localhost:8080/health`
 
-```text
-unbiased-ai-decision/
-├── backend/
-├── flutter-app/
-├── user-tests/
-├── docker/
-├── .env.example
-├── video_script.md
-├── IMPACT_STORY.md
-└── README.md
-```
+Local demo behavior:
+
+- If Firebase and Firestore are configured, guest/demo mode uses Firebase anonymous auth plus Firestore sample data
+- If Firebase demo services are unavailable, the app can still enter guest mode and the backend falls back to a local file-backed audit store for the sample audit and new uploads
+
+### Deployed demo
+
+This repository includes deployment scaffolding, but it does **not** ship with a published Cloud Run URL by default. After deployment, replace the placeholder URL in your project materials with the real deployed target.
+
+## Why this project stands out
+
+- Mobile-first accessibility through Flutter for phone, tablet, and web use
+- Plain-language Gemini explanations for non-technical decision-makers
+- SHAP feature impact and causal pathway analysis for technical reviewers
+- SDG 10.3 framing for impact and policy alignment
+- User-test evidence across hiring, lending, and medical triage workflows
 
 ## Architecture
 
@@ -70,32 +81,71 @@ unbiased-ai-decision/
      +---------------+-----------------+
                      |
                      v
-              +------+------+
+              +------+------+ 
               | Firestore   |
-              | audit store |
+              | or local    |
+              | demo store  |
               +-------------+
 ```
 
-## Setup
+## Repository layout
+
+```text
+unbiased-ai-decision/
+|-- backend/
+|-- flutter-app/
+|-- user-tests/
+|-- docker/
+|-- .env.example
+|-- video_script.md
+|-- IMPACT_STORY.md
+`-- README.md
+```
+
+## Local setup
 
 1. Clone the repository.
-2. Copy `.env.example` to `.env` and fill in Firebase, Vertex AI, and Gemini values.
-3. From the project root, run:
+2. Copy `.env.example` to `.env`.
+3. Fill in Firebase, Vertex AI, and Gemini values if you want the full Google-backed experience.
+4. Start the app:
 
-   ```bash
-   cd docker
-   docker-compose up --build
-   ```
+```bash
+cd docker
+docker compose up --build
+```
 
-4. Backend runs at [http://localhost:8080](http://localhost:8080)
-5. Flutter web runs at [http://localhost:3000](http://localhost:3000)
-6. Seed the guest demo audit:
+5. Open the app at `http://localhost:3000`.
+6. Open the backend health endpoint at `http://localhost:8080/health` to confirm service status.
+7. Use `Try as Guest - no sign-up needed` from the login screen.
 
-   ```bash
-   python backend/seed_sample_audit.py
-   ```
+Optional sample seeding:
 
-## Cloud Run Deployment
+```bash
+python backend/seed_sample_audit.py
+```
+
+The sample seed is useful for Firestore-backed demos. The local fallback store will auto-provide a sample audit even if Firestore is not configured.
+
+## Environment variables
+
+See [`.env.example`](.env.example) for the full set. The main groups are:
+
+- Firebase service account and web app config
+- Gemini API key
+- Vertex AI project, region, and staging bucket
+- Flutter backend base URL
+
+## Backend API
+
+- `GET /`
+- `GET /health`
+- `POST /audit`
+- `GET /audit/{audit_id}`
+- `GET /audit/history/{user_id}`
+- `POST /auth/verify`
+- `GET /auth/me`
+
+## Cloud Run deployment
 
 ```bash
 gcloud builds submit --tag gcr.io/PROJECT_ID/unbiased-ai
@@ -107,45 +157,26 @@ gcloud run deploy unbiased-ai \
   --set-env-vars GEMINI_API_KEY=...,FIREBASE_...=...
 ```
 
-After deployment, copy the generated Cloud Run URL into `.env`, Flutter build args, and the **Live Demo** section above.
+After deployment, update:
 
-## Backend API
+- `FLUTTER_API_BASE_URL`
+- your shared demo link
+- any README or submission materials that still contain placeholders
 
-- `GET /health`
-- `POST /audit`
-- `GET /audit/{audit_id}`
-- `GET /audit/history/{user_id}`
-- `POST /auth/verify`
-- `GET /auth/me`
+## User test evidence
 
-## User Test Evidence
+- [User Test 1 - Recruiter workflow](user-tests/test_1_recruiter_tool.md)
+- [User Test 2 - Loan approval workflow](user-tests/test_2_loan_model.md)
+- [User Test 3 - Medical triage workflow](user-tests/test_3_medical_triage.md)
 
-- [User Test 1 — Recruiter workflow](user-tests/test_1_recruiter_tool.md)
-- [User Test 2 — Loan approval workflow](user-tests/test_2_loan_model.md)
-- [User Test 3 — Medical triage workflow](user-tests/test_3_medical_triage.md)
+## Impact and video assets
 
-## Video Script And Demo
-
+- [Community impact story](IMPACT_STORY.md)
 - [Problem statement video script](video_script.md)
-- Demo video link: add the final unlisted YouTube URL after recording the scripted walkthrough
 
-## SDG Alignment
-
-The app displays the SDG marker everywhere an audit result appears:
-
-- Flutter report screen shows **SDG 10 — Reduced Inequalities**
-- Firestore audit documents store `sdg_tag: "SDG 10.3"`
-- Gemini explanations reference SDG 10.3 for severe findings
-- User test evidence ties each workflow back to equal opportunity outcomes
-- The impact narrative explains why Target 10.3 is the right benchmark
-
-## Community Impact Story
-
-- [Read the impact narrative](IMPACT_STORY.md)
-
-## Future Roadmap
+## Roadmap
 
 - CI/CD bias gates for model release approval
 - Multi-language support for policy and compliance teams
 - Government API integrations for regulated decision audits
-- Real-time monitoring dashboard for production fairness drift
+- Real-time fairness monitoring dashboards

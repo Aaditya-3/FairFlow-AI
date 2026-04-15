@@ -4,6 +4,8 @@ FairFlow AI is a full-stack fairness auditing platform for hiring workflows. It 
 
 The main application in this repository is the FastAPI + React project in `backend/` and `frontend/`. A separate prototype lives in `unbiased-ai-decision/` and is not required to run the main FairFlow AI app.
 
+If you are looking for the Google-stack submission assets mentioned elsewhere in this repository, see [`unbiased-ai-decision/README.md`](unbiased-ai-decision/README.md). That prototype contains the Firebase, Vertex AI, Gemini, Flutter mobile/web app, guest demo flow, SDG 10.3 framing, user tests, impact story, video script, and deployment scaffold.
+
 ## What the project does
 
 - Uploads hiring datasets and computes fairness metrics on observed outcomes

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 
 from firebase_config import firebase_status
+from local_store import local_storage_status
 from vertex_pipeline import vertex_status
 
 
@@ -24,7 +25,11 @@ def health_check():
             "vertex": vertex_status(),
             "gemini": gemini_state,
             "auth": firebase_services["auth"],
+            "demo_storage": local_storage_status()["storage"],
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "details": firebase_services.get("details"),
+        "details": {
+            "firebase": firebase_services.get("details"),
+            "demo_storage_path": local_storage_status()["path"],
+        },
     }

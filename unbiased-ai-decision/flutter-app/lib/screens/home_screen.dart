@@ -1,7 +1,6 @@
 import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:lottie/lottie.dart';
@@ -51,8 +50,8 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<Map<String, dynamic>> _loadSummary() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
+    final session = AuthService.instance.currentSession;
+    if (session == null) {
       return {
         'auditsRun': 0,
         'avgBiasScore': 0.0,
@@ -62,8 +61,8 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     final summary = await FirebaseService.instance.computeDashboardSummary(
-      user.uid,
-      includeSample: user.isAnonymous,
+      session.uid,
+      includeSample: session.isGuest,
     );
     final cachedAudit = AuthService.instance.consumePreloadedGuestAudit();
     final recentAudits =
@@ -116,13 +115,13 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  String _displayName(User? user) {
-    if (user == null) return 'there';
-    if (user.isAnonymous) return 'Guest';
-    if ((user.displayName ?? '').trim().isNotEmpty) {
-      return user.displayName!.trim().split(' ').first;
+  String _displayName(AuthSession? session) {
+    if (session == null) return 'there';
+    if (session.isGuest) return 'Guest';
+    if ((session.name ?? '').trim().isNotEmpty) {
+      return session.name!.trim().split(' ').first;
     }
-    final email = user.email ?? '';
+    final email = session.email ?? '';
     if (email.isNotEmpty) {
       final token = email.split('@').first;
       if (token.isNotEmpty) {
@@ -170,8 +169,8 @@ class _HomeScreenState extends State<HomeScreen>
     final theme = Theme.of(context);
     final textTheme = theme.textTheme;
     final bool isDark = theme.brightness == Brightness.dark;
-    final user = FirebaseAuth.instance.currentUser;
-    final name = _displayName(user);
+    final session = AuthService.instance.currentSession;
+    final name = _displayName(session);
 
     return Scaffold(
       appBar: AppBar(
@@ -260,7 +259,7 @@ class _HomeScreenState extends State<HomeScreen>
               children: [
                 _GreetingPanel(
                   name: name,
-                  isGuest: user?.isAnonymous ?? false,
+                  isGuest: session?.isGuest ?? false,
                 ),
                 const SizedBox(height: 24),
                 Text(

@@ -1,6 +1,6 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../services/auth_service.dart';
 import '../services/firebase_service.dart';
 import 'report_screen.dart';
 
@@ -19,20 +19,27 @@ class HistoryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
+    final session = AuthService.instance.currentSession;
+    if (session == null) {
       return const Scaffold(
         body: Center(child: Text('Sign in to view your audit history.')),
       );
     }
 
-    final stream = user.isAnonymous
+    final stream = session.isGuest
         ? Stream<List<Map<String, dynamic>>>.fromFuture(
-            FirebaseService.instance.fetchSampleAudit().then(
-                  (sample) => sample == null ? <Map<String, dynamic>>[] : [sample],
+            FirebaseService.instance.fetchRecentAudits(session.uid, limit: 20).then(
+                  (audits) async {
+                    if (audits.isNotEmpty) {
+                      return audits;
+                    }
+
+                    final sample = await FirebaseService.instance.fetchSampleAudit();
+                    return sample == null ? <Map<String, dynamic>>[] : [sample];
+                  },
                 ),
           )
-        : FirebaseService.instance.streamAuditHistory(user.uid);
+        : FirebaseService.instance.streamAuditHistory(session.uid);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Audit History')),
