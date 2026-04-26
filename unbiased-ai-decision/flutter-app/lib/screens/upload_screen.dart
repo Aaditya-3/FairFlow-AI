@@ -6,6 +6,7 @@ import 'package:shimmer/shimmer.dart';
 
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../services/firebase_service.dart';
 import '../theme/app_theme.dart';
 import 'report_screen.dart';
 
@@ -21,6 +22,7 @@ class _UploadScreenState extends State<UploadScreen> {
   PlatformFile? _modelFile;
   final TextEditingController _modelNameController = TextEditingController();
   bool _loading = false;
+  String? _activeAuditId;
 
   Future<void> _pickDataset() async {
     final result = await FilePicker.platform.pickFiles(
@@ -53,7 +55,11 @@ class _UploadScreenState extends State<UploadScreen> {
       return;
     }
 
-    setState(() => _loading = true);
+    final auditId = FirebaseService.instance.createAuditId();
+    setState(() {
+      _loading = true;
+      _activeAuditId = auditId;
+    });
     try {
       final response = await ApiService.instance.runAudit(
         datasetFile: _datasetFile!,
@@ -62,6 +68,7 @@ class _UploadScreenState extends State<UploadScreen> {
             ? 'Uploaded Decision Model'
             : _modelNameController.text.trim(),
         userId: session.uid,
+        auditId: auditId,
       );
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -80,7 +87,10 @@ class _UploadScreenState extends State<UploadScreen> {
       );
     } finally {
       if (mounted) {
-        setState(() => _loading = false);
+        setState(() {
+          _loading = false;
+          _activeAuditId = null;
+        });
       }
     }
   }
@@ -235,6 +245,10 @@ class _UploadScreenState extends State<UploadScreen> {
             ),
           ),
           const SizedBox(height: 28),
+          if (_activeAuditId != null) ...[
+            _AuditStatusTimeline(auditId: _activeAuditId!),
+            const SizedBox(height: 18),
+          ],
           _GradientActionButton(
             label: 'Run Bias Audit',
             loadingLabel: 'Running fairness analysis...',
@@ -252,6 +266,128 @@ class _UploadScreenState extends State<UploadScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _AuditStatusTimeline extends StatelessWidget {
+  const _AuditStatusTimeline({
+    required this.auditId,
+  });
+
+  final String auditId;
+
+  static const _stages = <String>[
+    'uploading',
+    'uploaded',
+    'preparing_features',
+    'calling_vertex_endpoint',
+    'running_predictions',
+    'generating_shap',
+    'building_causal_graph',
+    'computing_fairness_metrics',
+    'generating_gemini',
+    'complete',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return StreamBuilder<Map<String, dynamic>?>(
+      stream: FirebaseService.instance.streamAudit(auditId),
+      builder: (context, snapshot) {
+        final audit = snapshot.data;
+        final stage = audit?['stage']?.toString() ?? 'uploading';
+        final status = audit?['status']?.toString() ?? 'processing';
+        final activeIndex = _stages.indexOf(stage).clamp(0, _stages.length - 1);
+
+        return Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: theme.cardColor,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: theme.colorScheme.outline.withOpacity(0.18),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.cloud_sync_rounded,
+                    color: AppColors.unBlue,
+                    semanticLabel: 'Live Firestore status',
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Live Firestore audit status',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                  Text(
+                    status,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: status == 'failed' ? AppColors.danger : AppColors.unBlue,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (var index = 0; index < _stages.length; index++)
+                    _StageChip(
+                      label: _stages[index].replaceAll('_', ' '),
+                      active: index == activeIndex,
+                      complete: index < activeIndex || stage == 'complete',
+                    ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _StageChip extends StatelessWidget {
+  const _StageChip({
+    required this.label,
+    required this.active,
+    required this.complete,
+  });
+
+  final String label;
+  final bool active;
+  final bool complete;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = complete
+        ? AppColors.success
+        : active
+            ? AppColors.unBlue
+            : Theme.of(context).colorScheme.onSurfaceVariant;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withOpacity(active || complete ? 0.14 : 0.08),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: color,
+              fontWeight: active || complete ? FontWeight.w800 : FontWeight.w600,
+            ),
       ),
     );
   }

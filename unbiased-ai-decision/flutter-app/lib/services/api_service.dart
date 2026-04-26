@@ -26,6 +26,7 @@ class ApiService {
     PlatformFile? modelFile,
     required String modelName,
     required String userId,
+    String? auditId,
   }) async {
     final request = http.MultipartRequest(
       'POST',
@@ -33,6 +34,9 @@ class ApiService {
     )
       ..fields['model_name'] = modelName
       ..fields['user_id'] = userId;
+    if (auditId != null) {
+      request.fields['audit_id'] = auditId;
+    }
 
     request.files.add(await _buildFile('dataset_file', datasetFile));
     if (modelFile != null) {
