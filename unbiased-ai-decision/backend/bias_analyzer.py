@@ -339,6 +339,35 @@ def _compute_shap_summary(model: Any, feature_frame: pd.DataFrame) -> tuple[list
     return shap_rows[:10], [row["feature"] for row in shap_rows[:3]]
 
 
+def _coerce_remote_shap(
+    remote_shap: Any,
+    feature_columns: list[str],
+) -> tuple[list[dict[str, float]], list[str]]:
+    if isinstance(remote_shap, dict):
+        rows = [
+            {"feature": str(feature), "value": abs(_safe_float(value))}
+            for feature, value in remote_shap.items()
+            if str(feature) in feature_columns
+        ]
+    elif isinstance(remote_shap, list):
+        rows = []
+        for item in remote_shap:
+            if isinstance(item, dict) and "feature" in item:
+                rows.append(
+                    {
+                        "feature": str(item["feature"]),
+                        "value": abs(_safe_float(item.get("value"))),
+                    }
+                )
+    else:
+        rows = []
+
+    rows.sort(key=lambda item: item["value"], reverse=True)
+    if not rows:
+        raise ValueError("Vertex endpoint did not return SHAP feature attributions.")
+    return rows[:10], [row["feature"] for row in rows[:3]]
+
+
 def _build_causal_graph(
     feature_frame: pd.DataFrame,
     protected_series: np.ndarray,
@@ -478,6 +507,7 @@ def analyze_bias(
     dataset_path: str,
     model_artifact_path: str | None = None,
     status_callback: Any | None = None,
+    prediction_provider: Any | None = None,
 ) -> dict[str, Any]:
     def publish(stage: str, status: str = "processing") -> None:
         if status_callback is not None:
@@ -507,24 +537,46 @@ def analyze_bias(
     feature_frame = encoded[feature_columns]
     labels = normalized[target_column].to_numpy(dtype=int)
 
-    loaded_model = _load_model(model_artifact_path)
-    if loaded_model is None:
+    remote_prediction = None
+    if prediction_provider is not None:
+        publish("calling_vertex_endpoint")
+        remote_prediction = prediction_provider(feature_frame, domain)
+
+    loaded_model = None if remote_prediction else _load_model(model_artifact_path)
+    if remote_prediction:
+        predictions = np.asarray(remote_prediction["predictions"]).astype(int)
+        probabilities = np.asarray(remote_prediction["probabilities"]).astype(float)
+        shap_values, shap_top3 = _coerce_remote_shap(
+            remote_prediction.get("shap_values"),
+            feature_columns,
+        )
+        model_family = remote_prediction.get("model_family", "vertex_endpoint_model")
+        analysis_backend = "vertex_endpoint"
+    elif loaded_model is None:
         model, model_family = _build_domain_model(domain)
         publish(f"training_{domain}_model")
         model.fit(feature_frame, labels)
+        publish("running_predictions")
+        predictions = np.asarray(model.predict(feature_frame)).astype(int)
+        if hasattr(model, "predict_proba"):
+            probabilities = np.asarray(model.predict_proba(feature_frame))[:, -1]
+        else:
+            probabilities = predictions.astype(float)
+        publish("generating_shap")
+        shap_values, shap_top3 = _compute_shap_summary(model, feature_frame)
+        analysis_backend = "local_domain_model"
     else:
         model = loaded_model
         model_family = "uploaded_model_artifact"
-
-    publish("running_predictions")
-    predictions = np.asarray(model.predict(feature_frame)).astype(int)
-    if hasattr(model, "predict_proba"):
-        probabilities = np.asarray(model.predict_proba(feature_frame))[:, -1]
-    else:
-        probabilities = predictions.astype(float)
-
-    publish("generating_shap")
-    shap_values, shap_top3 = _compute_shap_summary(model, feature_frame)
+        publish("running_predictions")
+        predictions = np.asarray(model.predict(feature_frame)).astype(int)
+        if hasattr(model, "predict_proba"):
+            probabilities = np.asarray(model.predict_proba(feature_frame))[:, -1]
+        else:
+            probabilities = predictions.astype(float)
+        publish("generating_shap")
+        shap_values, shap_top3 = _compute_shap_summary(model, feature_frame)
+        analysis_backend = "uploaded_artifact"
     publish("building_causal_graph")
     causal_graph_json, causal_pathway = _build_causal_graph(
         feature_frame,
@@ -562,7 +614,7 @@ def analyze_bias(
     return {
         "domain": domain,
         "model_family": model_family,
-        "analysis_backend": "local_domain_model",
+        "analysis_backend": analysis_backend,
         "bias_score": bias_score,
         "fairness_metrics": fairness_metrics,
         "shap_values": shap_values,
