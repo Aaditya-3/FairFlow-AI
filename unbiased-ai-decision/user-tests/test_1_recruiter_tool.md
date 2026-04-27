@@ -37,8 +37,8 @@ SDG 10.3 Relevance: Direct — equal employment opportunity
 That explains so much. This is exactly what I needed
 to show my leadership team why we need to change the system."
 
-## Screenshot Placeholder
-[screenshot_test1_report_screen.png]
+## Screenshot
+![Screenshot](../../docs/screenshots/screenshot_test1_report_screen.png)
 
 ## Improvements Made After This Test
 - Added info tooltips on all fairness metric labels
