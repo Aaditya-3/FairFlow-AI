@@ -36,8 +36,8 @@ SDG 3 Relevance: Direct — health outcomes are affected by triage bias
 "The model was deprioritizing elderly uninsured patients — this could cost lives.
 We needed something that made the risk obvious in minutes, and this did."
 
-## Screenshot Placeholder
-[screenshot_test3_medical_report.png]
+## Screenshot
+![Screenshot](../../docs/screenshots/screenshot_test3_medical_triage.png)
 
 ## Improvements Made After This Test
 - Added more prominent severe-risk styling for medical triage audits

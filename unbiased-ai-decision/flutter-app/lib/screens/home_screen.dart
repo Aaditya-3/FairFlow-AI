@@ -3,12 +3,12 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:lottie/lottie.dart';
 import 'package:shimmer/shimmer.dart';
 
 import '../services/auth_service.dart';
 import '../services/firebase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/fairness_scale_animation.dart';
 import 'history_screen.dart';
 import 'report_screen.dart';
 import 'upload_screen.dart';
@@ -825,9 +825,6 @@ class _HomeEmptyState extends StatelessWidget {
 
   final VoidCallback onPrimaryAction;
 
-  static const String _emptyStateLottieUrl =
-      'https://assets1.lottiefiles.com/packages/lf20_qp1q7mct.json';
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -860,12 +857,10 @@ class _HomeEmptyState extends StatelessWidget {
       ),
       child: Column(
         children: [
-          SizedBox(
+          const SizedBox(
             height: 170,
-            child: Lottie.network(
-              _emptyStateLottieUrl,
-              repeat: true,
-              fit: BoxFit.contain,
+            child: Center(
+              child: FairnessScaleAnimation(),
             ),
           ),
           const SizedBox(height: 8),

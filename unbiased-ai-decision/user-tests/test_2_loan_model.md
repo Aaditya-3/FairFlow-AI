@@ -35,8 +35,8 @@ SDG 10.3 Relevance: Direct — equal financial opportunity regardless of geograp
 "I was shocked the model penalizes rural addresses at 3x the rate of urban ones.
 Without this audit, we would have kept calling the model objective."
 
-## Screenshot Placeholder
-[screenshot_test2_loan_report.png]
+## Screenshot
+![Screenshot](../../docs/screenshots/screenshot_test2_loan_bias.png)
 
 ## Improvements Made After This Test
 - Added clearer audit progress messaging during model execution
