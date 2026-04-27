@@ -7,6 +7,8 @@ _PLACEHOLDER_VALUES = {
     "your_gemini_api_key_here",
     "your_gcp_project_id",
     "gs://your-bucket-name",
+    "gs://your-staging-bucket",
+    "gs://your-model-bucket",
     "your_vertex_endpoint_id",
     "https://your-cloud-run-url.run.app",
     "your_firebase_web_api_key",
