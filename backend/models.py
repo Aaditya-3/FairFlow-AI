@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -35,6 +36,7 @@ class Audit(Base):
     bias_detected = Column(Boolean, nullable=False, default=False)
     mitigation_applied = Column(Boolean, nullable=False, default=False)
     mitigation_results = Column(JSON, nullable=True)
+    domain_config = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict)
 
     user = relationship("User", back_populates="audits")
     candidates = relationship("Candidate", back_populates="audit", cascade="all, delete-orphan")
@@ -92,3 +94,13 @@ class AuditCertificate(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
     audit = relationship("Audit", back_populates="certificates")
+
+
+class DomainTemplate(Base):
+    __tablename__ = "domain_templates"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    domain = Column(String(64), unique=True, nullable=False, index=True)
+    display_name = Column(String(128), nullable=False)
+    config = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

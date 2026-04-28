@@ -3,12 +3,12 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:lottie/lottie.dart';
 import 'package:shimmer/shimmer.dart';
 
 import '../services/auth_service.dart';
 import '../services/firebase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/fairness_scale_animation.dart';
 import 'history_screen.dart';
 import 'report_screen.dart';
 import 'upload_screen.dart';
@@ -55,7 +55,7 @@ class _HomeScreenState extends State<HomeScreen>
       return {
         'auditsRun': 0,
         'avgBiasScore': 0.0,
-        'sdgAlignment': 'SDG 10.3',
+        'sdgAlignment': 'SDG 10.3, 8.5, 16.b',
         'recentAudits': <Map<String, dynamic>>[],
       };
     }
@@ -138,6 +138,12 @@ class _HomeScreenState extends State<HomeScreen>
     }
     if (value is DateTime) {
       return DateFormat.yMMMd().format(value);
+    }
+    if (value is String) {
+      final parsed = DateTime.tryParse(value);
+      if (parsed != null) {
+        return DateFormat.yMMMd().format(parsed.toLocal());
+      }
     }
     return value.toString();
   }
@@ -238,13 +244,13 @@ class _HomeScreenState extends State<HomeScreen>
               {
                 'auditsRun': 0,
                 'avgBiasScore': 0.0,
-                'sdgAlignment': 'SDG 10.3',
+                'sdgAlignment': 'SDG 10.3, 8.5, 16.b',
                 'recentAudits': <Map<String, dynamic>>[],
               };
 
-          final recentAudits =
-              (summary['recentAudits'] as List?)?.cast<Map<String, dynamic>>() ??
-                  <Map<String, dynamic>>[];
+          final recentAudits = (summary['recentAudits'] as List?)
+                  ?.cast<Map<String, dynamic>>() ??
+              <Map<String, dynamic>>[];
           final double avgBias =
               (summary['avgBiasScore'] as num?)?.toDouble() ?? 0.0;
 
@@ -300,8 +306,8 @@ class _HomeScreenState extends State<HomeScreen>
                       const SizedBox(width: 14),
                       const _GlassStatCard(
                         title: 'SDG Alignment',
-                        value: 'SDG 10.3',
-                        subtitle: 'Equal opportunity focus is active',
+                        value: '3 targets',
+                        subtitle: '10.3, 8.5, and 16.b mapped',
                         icon: Icons.verified_rounded,
                         accent: AppColors.unBlue,
                       ),
@@ -349,13 +355,13 @@ class _HomeScreenState extends State<HomeScreen>
                   ...recentAudits.asMap().entries.map(
                         (entry) => Padding(
                           padding: EdgeInsets.only(
-                            bottom: entry.key == recentAudits.length - 1
-                                ? 0
-                                : 14,
+                            bottom:
+                                entry.key == recentAudits.length - 1 ? 0 : 14,
                           ),
                           child: _AuditPreviewCard(
                             audit: entry.value,
-                            formattedDate: _formatDate(entry.value['created_at']),
+                            formattedDate:
+                                _formatDate(entry.value['created_at']),
                             score: _scoreOf(entry.value),
                             severityColor:
                                 _severityColor(_scoreOf(entry.value)),
@@ -470,7 +476,7 @@ class _GreetingPanel extends StatelessWidget {
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
-                  'SDG 10.3 aligned',
+                  'SDG 10.3, 8.5, 16.b',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: AppColors.unBlue,
                         fontWeight: FontWeight.w700,
@@ -819,9 +825,6 @@ class _HomeEmptyState extends StatelessWidget {
 
   final VoidCallback onPrimaryAction;
 
-  static const String _emptyStateLottieUrl =
-      'https://assets1.lottiefiles.com/packages/lf20_qp1q7mct.json';
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -854,12 +857,10 @@ class _HomeEmptyState extends StatelessWidget {
       ),
       child: Column(
         children: [
-          SizedBox(
+          const SizedBox(
             height: 170,
-            child: Lottie.network(
-              _emptyStateLottieUrl,
-              repeat: true,
-              fit: BoxFit.contain,
+            child: Center(
+              child: FairnessScaleAnimation(),
             ),
           ),
           const SizedBox(height: 8),

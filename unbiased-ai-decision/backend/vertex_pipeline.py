@@ -1,86 +1,156 @@
 from __future__ import annotations
 
-import json
 import os
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from google.cloud import aiplatform
+import numpy as np
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
-from bias_analyzer import analyze_bias
-from firebase_config import db, require_firestore
-from local_store import save_local_audit
+from audit_support import attach_certificate_fields
+from bias_analyzer import analyze_bias, prepare_audit_dataset
+from firebase_config import require_firestore
+from local_audit_store import local_store_enabled, upsert_local_audit
+from runtime_config import has_real_env_value
+from schemas import DomainName
+from vertex_model import (
+    cleanup_bundle,
+    predict_with_endpoint,
+    train_register_and_deploy,
+    use_vertex_ai,
+    vertex_sdk_available,
+)
 
 
 def vertex_status() -> str:
-    required = [
-        os.getenv("VERTEX_PROJECT_ID"),
-        os.getenv("VERTEX_REGION"),
-        os.getenv("VERTEX_STAGING_BUCKET"),
-    ]
+    if not use_vertex_ai():
+        return "disabled"
+    if not vertex_sdk_available():
+        return "not_configured"
+    required = (
+        has_real_env_value("VERTEX_PROJECT_ID"),
+        has_real_env_value("VERTEX_REGION"),
+        has_real_env_value("VERTEX_STAGING_BUCKET"),
+        has_real_env_value("VERTEX_MODEL_BUCKET"),
+    )
     return "ready" if all(required) else "not_configured"
 
 
-def _submit_vertex_custom_job(dataset_path: str, model_artifact_path: str | None) -> str | None:
-    if vertex_status() != "ready":
-        return None
+def _local_predict(bundle, feature_frame) -> tuple[np.ndarray, np.ndarray]:
+    predictions = np.asarray(bundle.pipeline.predict(feature_frame)).astype(int)
+    probabilities = np.asarray(bundle.pipeline.predict_proba(feature_frame))[:, -1]
+    return predictions, probabilities
 
-    if not dataset_path.startswith("gs://"):
-        return None
 
-    project = os.environ["VERTEX_PROJECT_ID"]
-    region = os.environ["VERTEX_REGION"]
-    staging_bucket = os.environ["VERTEX_STAGING_BUCKET"]
-    image_uri = os.getenv(
-        "VERTEX_TRAINING_IMAGE",
-        "us-docker.pkg.dev/vertex-ai/training/scikit-learn-cpu.1-5:latest",
+def run_bias_analysis(
+    dataset_path: str,
+    domain: DomainName,
+    audit_id: str,
+    protected_attribute: str | None = None,
+    status_callback: Any | None = None,
+) -> dict[str, Any]:
+    prepared = prepare_audit_dataset(dataset_path, domain, protected_attribute=protected_attribute)
+    bundle = train_register_and_deploy(prepared, audit_id)
+    try:
+        if status_callback is not None:
+            status_callback("computing_metrics")
+        if use_vertex_ai() and bundle.endpoint_name:
+            predictions, probabilities = predict_with_endpoint(bundle.endpoint_name, prepared.feature_frame)
+            analysis_backend = "vertex_endpoint"
+        else:
+            predictions, probabilities = _local_predict(bundle, prepared.feature_frame)
+            analysis_backend = "local_random_forest"
+
+        result = analyze_bias(
+            prepared=prepared,
+            trained_model=bundle.pipeline,
+            predictions=predictions,
+            probabilities=probabilities,
+            model_family=bundle.model_family,
+            analysis_backend=analysis_backend,
+            vertex_endpoint_name=bundle.endpoint_name,
+            stage_callback=status_callback,
+        )
+        result["vertex_model_name"] = bundle.vertex_model_name
+        result["vertex_endpoint_name"] = bundle.endpoint_name
+        result["artifact_uri"] = bundle.artifact_uri
+        return result
+    finally:
+        cleanup_bundle(bundle)
+
+
+def create_audit_record(user_id: str, audit_id: str | None, payload: dict[str, Any]) -> str:
+    document_id = audit_id or str(uuid4())
+    if local_store_enabled():
+        upsert_local_audit(
+            document_id,
+            {
+                "user_id": user_id,
+                "status": "processing",
+                "stage": "uploading",
+                **payload,
+            },
+        )
+        return document_id
+
+    firestore_client = require_firestore()
+    firestore_client.collection("audits").document(document_id).set(
+        {
+            "user_id": user_id,
+            "status": "processing",
+            "stage": "uploading",
+            "created_at": SERVER_TIMESTAMP,
+            "updated_at": SERVER_TIMESTAMP,
+            **payload,
+        },
+        merge=True,
+    )
+    return document_id
+
+
+def update_audit_status(
+    audit_id: str,
+    stage: str,
+    status: str = "processing",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    if local_store_enabled():
+        upsert_local_audit(
+            audit_id,
+            {
+                "status": status,
+                "stage": stage,
+                **(extra or {}),
+            },
+        )
+        return
+
+    firestore_client = require_firestore()
+    firestore_client.collection("audits").document(audit_id).set(
+        {
+            "status": status,
+            "stage": stage,
+            "updated_at": SERVER_TIMESTAMP,
+            **(extra or {}),
+        },
+        merge=True,
     )
 
-    try:
-        aiplatform.init(project=project, location=region, staging_bucket=staging_bucket)
-        display_name = f"unbiased-bias-audit-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-        worker_pool_specs = [
-            {
-                "machine_spec": {"machine_type": "n1-standard-4"},
-                "replica_count": 1,
-                "container_spec": {
-                    "image_uri": image_uri,
-                    "command": ["python", "-c", "print('Vertex AI audit trigger received')"],
-                    "args": [
-                        json.dumps(
-                            {
-                                "dataset_path": dataset_path,
-                                "model_artifact_path": model_artifact_path,
-                            }
-                        )
-                    ],
-                },
-            }
-        ]
-        custom_job = aiplatform.CustomJob(
-            display_name=display_name,
-            worker_pool_specs=worker_pool_specs,
-            staging_bucket=staging_bucket,
-        )
-        custom_job.run(sync=False)
-        return custom_job.resource_name
-    except Exception:
-        return None
 
-
-def run_bias_analysis(dataset_path: str, model_artifact_path: str | None = None) -> dict[str, Any]:
-    local_result = analyze_bias(dataset_path, model_artifact_path)
-    local_result["vertex_job_name"] = _submit_vertex_custom_job(dataset_path, model_artifact_path)
-    return local_result
-
-
-def store_audit_result(user_id: str, result_dict: dict[str, Any]) -> str:
+def store_audit_result(user_id: str, result_dict: dict[str, Any], audit_id: str | None = None) -> str:
+    document_id = audit_id or str(uuid4())
     payload = {
         "user_id": user_id,
+        "organization_name": result_dict.get("organization_name", "FairFlow Demo Organization"),
         "model_name": result_dict.get("model_name", "Unnamed Model"),
         "dataset_name": result_dict.get("dataset_name", "uploaded_dataset.csv"),
+        "domain": result_dict.get("domain", "hiring"),
+        "protected_attribute_used": result_dict.get(
+            "protected_attribute_used",
+            result_dict.get("sensitive_attribute", "gender"),
+        ),
+        "model_family": result_dict.get("model_family", "unknown"),
+        "analysis_backend": result_dict.get("analysis_backend", "local"),
         "bias_score": result_dict.get("bias_score", 0),
         "fairness_metrics": result_dict.get("fairness_metrics", {}),
         "shap_values": result_dict.get("shap_values", []),
@@ -92,23 +162,41 @@ def store_audit_result(user_id: str, result_dict: dict[str, Any]) -> str:
         "individual_fairness": result_dict.get("individual_fairness", 0),
         "calibration_error": result_dict.get("calibration_error", 0),
         "sdg_tag": "SDG 10.3",
+        "sdg_mapping": result_dict.get("sdg_mapping", {}),
         "gemini_explanation": result_dict.get("gemini_explanation", ""),
+        "gemini_recommendations": result_dict.get("gemini_recommendations", []),
+        "gemini_legal_risk": result_dict.get("gemini_legal_risk", ""),
+        "gemini_audit_qa": result_dict.get("gemini_audit_qa", []),
+        "jurisdiction_risks": result_dict.get("jurisdiction_risks", []),
+        "candidate_flags": result_dict.get("candidate_flags", []),
+        "counterfactuals": result_dict.get("counterfactuals", []),
         "status": result_dict.get("status", "completed"),
-        "vertex_job_name": result_dict.get("vertex_job_name"),
+        "stage": result_dict.get("stage", "complete"),
+        "vertex_model_name": result_dict.get("vertex_model_name"),
+        "vertex_endpoint_name": result_dict.get("vertex_endpoint_name"),
+        "artifact_uri": result_dict.get("artifact_uri"),
+        "created_at": result_dict.get("created_at"),
     }
+    payload = attach_certificate_fields(payload)
 
-    if db is None:
-        document_id = f"local-{uuid4()}"
-        payload["created_at"] = datetime.now(timezone.utc)
-        return save_local_audit(document_id, payload)
+    if local_store_enabled():
+        upsert_local_audit(document_id, payload)
+        return document_id
 
     firestore_client = require_firestore()
     collection = firestore_client.collection("audits")
-    document_reference = collection.document()
+    document_reference = collection.document(audit_id) if audit_id else collection.document()
     document_reference.set(
         {
             **payload,
             "created_at": SERVER_TIMESTAMP,
+            "updated_at": SERVER_TIMESTAMP,
         }
+        if audit_id is None
+        else {
+            **payload,
+            "updated_at": SERVER_TIMESTAMP,
+        },
+        merge=bool(audit_id),
     )
     return document_reference.id

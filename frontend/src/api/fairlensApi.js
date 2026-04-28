@@ -56,13 +56,22 @@ const getErrorMessage = (error, fallbackMessage) => {
       .filter(Boolean)
       .join(", ");
   }
+  if (detail && typeof detail === "object") {
+    if (typeof detail.message === "string" && detail.message.trim()) {
+      return detail.message;
+    }
+    if (Array.isArray(detail.missing_columns) && detail.missing_columns.length > 0) {
+      return `Missing required columns: ${detail.missing_columns.join(", ")}`;
+    }
+  }
   if (typeof error?.response?.data === "string" && error.response.data.trim()) {
     return error.response.data;
   }
   return fallbackMessage || "Something went wrong.";
 };
 
-const performRequest = async (request, fallbackMessage) => {
+const performRequest = async (request, fallbackMessage, options = {}) => {
+  const { silent = false } = options;
   try {
     const response = await request();
     return response.data;
@@ -70,7 +79,9 @@ const performRequest = async (request, fallbackMessage) => {
     if (error?.response?.status === 401) {
       throw error;
     }
-    toast.error(getErrorMessage(error, fallbackMessage));
+    if (!silent) {
+      toast.error(getErrorMessage(error, fallbackMessage));
+    }
     throw error;
   }
 };
@@ -119,11 +130,14 @@ export const uploadMultimodalAudit = async (formData) =>
     "Multimodal upload failed."
   );
 
-export const getAudit = async (id) =>
-  performRequest(() => api.get(`/audit/${id}`), "Could not load audit.");
+export const getAudit = async (id, options = {}) =>
+  performRequest(() => api.get(`/audit/${id}`), "Could not load audit.", options);
 
-export const listAudits = async () =>
-  performRequest(() => api.get("/audit/list"), "Could not load audits.");
+export const listAudits = async (options = {}) =>
+  performRequest(() => api.get("/audit/list"), "Could not load audits.", options);
+
+export const getAuditTemplates = async (options = {}) =>
+  performRequest(() => api.get("/domain/templates"), "Could not load domain templates.", options);
 
 export const getCandidates = async (auditId, params = {}) =>
   performRequest(

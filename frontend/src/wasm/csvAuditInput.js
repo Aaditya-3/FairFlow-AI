@@ -1,4 +1,4 @@
-const REQUIRED_HEADERS = ["gender", "hired"];
+const DEFAULT_REQUIRED_HEADERS = ["gender", "hired"];
 
 const normalizeHeader = (header) => header.trim().toLowerCase();
 
@@ -54,14 +54,30 @@ const parseCsvRows = (csvText) => {
   return rows;
 };
 
-const parseDecision = (value) => {
+const parseDecision = (value, positiveValue = "1") => {
   const normalized = String(value || "").trim().toLowerCase();
+  const normalizedPositive = String(positiveValue || "1").trim().toLowerCase();
+  if (normalized === normalizedPositive) {
+    return 1;
+  }
+  const numeric = Number.parseFloat(normalized);
+  const numericPositive = Number.parseFloat(normalizedPositive);
+  if (Number.isFinite(numeric) && Number.isFinite(numericPositive) && numeric === numericPositive) {
+    return 1;
+  }
   return normalized === "1" || normalized === "true" || normalized === "yes" ? 1 : 0;
 };
 
 const parseProtected = (value) => {
   const normalized = String(value || "").trim().toLowerCase();
-  return normalized === "m" || normalized === "male" || normalized === "man" ? 1 : 0;
+  if (!normalized) {
+    return 0;
+  }
+  const bucketOne = new Set(["m", "male", "man", "private", "white", "yes", "urban", "upper"]);
+  if (bucketOne.has(normalized)) {
+    return 1;
+  }
+  return 0;
 };
 
 const parseNumeric = (value) => {
@@ -76,15 +92,19 @@ export const buildEthosInputFromCsvText = (csvText, options = {}) => {
   }
 
   const headers = rows[0].map(normalizeHeader);
-  const missing = REQUIRED_HEADERS.filter((header) => !headers.includes(header));
+  const requiredHeaders = (options.requiredHeaders || DEFAULT_REQUIRED_HEADERS).map(normalizeHeader);
+  const missing = requiredHeaders.filter((header) => !headers.includes(header));
   if (missing.length > 0) {
     throw new Error(`CSV missing required headers: ${missing.join(", ")}`);
   }
 
   const proxyColumn = normalizeHeader(options.proxyColumn || "years_experience");
+  const protectedColumn = normalizeHeader(options.protectedColumn || "gender");
+  const outcomeColumn = normalizeHeader(options.outcomeColumn || "hired");
+  const outcomePositiveValue = options.outcomePositiveValue ?? 1;
   const proxyIndex = headers.indexOf(proxyColumn);
-  const genderIndex = headers.indexOf("gender");
-  const hiredIndex = headers.indexOf("hired");
+  const protectedIndex = headers.indexOf(protectedColumn);
+  const outcomeIndex = headers.indexOf(outcomeColumn);
 
   const yTrue = [];
   const yPred = [];
@@ -97,10 +117,10 @@ export const buildEthosInputFromCsvText = (csvText, options = {}) => {
       continue;
     }
 
-    const hired = parseDecision(row[hiredIndex]);
-    yTrue.push(hired);
-    yPred.push(hired);
-    protectedAttr.push(parseProtected(row[genderIndex]));
+    const outcome = parseDecision(row[outcomeIndex], outcomePositiveValue);
+    yTrue.push(outcome);
+    yPred.push(outcome);
+    protectedAttr.push(parseProtected(row[protectedIndex]));
     proxyFeature.push(proxyIndex >= 0 ? parseNumeric(row[proxyIndex]) : 0);
   }
 
@@ -116,4 +136,3 @@ export const buildEthosInputFromCsvText = (csvText, options = {}) => {
     proxyColumn
   };
 };
-

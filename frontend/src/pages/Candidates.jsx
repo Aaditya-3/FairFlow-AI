@@ -15,6 +15,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   LAST_AUDIT_STORAGE_KEY,
   explainCandidate,
+  getAudit,
   getCandidates,
   getCounterfactual
 } from "../api/fairlensApi";
@@ -32,12 +33,45 @@ function Candidates() {
   const [loading, setLoading] = useState(true);
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [panelLoading, setPanelLoading] = useState(false);
+  const [domainConfig, setDomainConfig] = useState({
+    subject_label: "Candidate",
+    outcome_label: "Hired",
+    protected_attributes: ["gender", "ethnicity", "age"],
+    feature_columns: ["years_experience"],
+    column_map: {}
+  });
   const deferredSearch = useDeferredValue(search);
 
   useEffect(() => {
     if (auditId) {
       localStorage.setItem(LAST_AUDIT_STORAGE_KEY, auditId);
     }
+  }, [auditId]);
+
+  useEffect(() => {
+    const fetchAudit = async () => {
+      try {
+        const audit = await getAudit(auditId);
+        setDomainConfig(
+          audit?.domain_config || {
+            subject_label: "Candidate",
+            outcome_label: "Hired",
+            protected_attributes: ["gender", "ethnicity", "age"],
+            feature_columns: ["years_experience"],
+            column_map: {}
+          }
+        );
+      } catch (error) {
+        setDomainConfig({
+          subject_label: "Candidate",
+          outcome_label: "Hired",
+          protected_attributes: ["gender", "ethnicity", "age"],
+          feature_columns: ["years_experience"],
+          column_map: {}
+        });
+      }
+    };
+    fetchAudit();
   }, [auditId]);
 
   useEffect(() => {
@@ -95,6 +129,25 @@ function Candidates() {
   };
 
   const totalPages = Math.max(1, Math.ceil(total / 20));
+  const subjectLabel = domainConfig?.subject_label || "Candidate";
+  const outcomeLabel = domainConfig?.outcome_label || "Hired";
+  const columnMap = domainConfig?.column_map || {};
+  const protectedAttributes = domainConfig?.protected_attributes || ["gender", "ethnicity", "age"];
+  const featureColumns = domainConfig?.feature_columns || ["years_experience"];
+  const primaryProtected = protectedAttributes[0] || "gender";
+  const secondaryProtected = protectedAttributes[1] || "ethnicity";
+  const primaryFeature = featureColumns[0] || "years_experience";
+  const secondaryFeature = featureColumns[1] || "education_level";
+
+  const getValue = (candidate, column) => {
+    if (candidate?.[column] !== undefined) {
+      return candidate[column];
+    }
+    if (candidate?.feature_payload?.[column] !== undefined) {
+      return candidate.feature_payload[column];
+    }
+    return "N/A";
+  };
 
   return (
     <div className="space-y-6">
@@ -102,9 +155,9 @@ function Candidates() {
         <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-dark">
-              Candidate Explorer
+              {subjectLabel} Explorer
             </p>
-            <h1 className="mt-3 text-4xl font-extrabold text-slate-900">Review flagged candidate decisions</h1>
+            <h1 className="mt-3 text-4xl font-extrabold text-slate-900">Review flagged {subjectLabel.toLowerCase()} decisions</h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-600">
               Search the current audit, filter bias flags, and open the slide-in review panel for
               SHAP explanations and protected-attribute counterfactual checks.
@@ -115,8 +168,8 @@ function Candidates() {
           </div>
           <div className="rounded-3xl bg-navy p-5 text-white shadow-glow">
             <p className="text-xs uppercase tracking-[0.18em] text-amber-light">Audit Scope</p>
-            <p className="mt-2 text-2xl font-bold">{total} candidates</p>
-            <p className="mt-2 text-sm text-slate-300">20 per page with saved candidate explanations</p>
+            <p className="mt-2 text-2xl font-bold">{total} {subjectLabel.toLowerCase()}s</p>
+            <p className="mt-2 text-sm text-slate-300">20 per page with saved explainability snapshots</p>
           </div>
         </div>
       </div>
@@ -133,7 +186,7 @@ function Candidates() {
                 setSearch(event.target.value);
               }}
               className="w-full rounded-2xl border-slate-200 bg-slate-50 px-12 py-3 focus:border-amber focus:ring-amber"
-              placeholder="Search by candidate name"
+              placeholder={`Search by ${subjectLabel.toLowerCase()} name`}
             />
           </div>
           <div className="flex items-center gap-3">
@@ -163,10 +216,10 @@ function Candidates() {
         ) : !candidates.length ? (
           <div className="flex min-h-[260px] flex-col items-center justify-center text-center">
             <ShieldCheck className="h-10 w-10 text-slate-300" />
-            <h2 className="mt-5 text-2xl font-bold text-slate-900">No candidates matched this view</h2>
+            <h2 className="mt-5 text-2xl font-bold text-slate-900">No {subjectLabel.toLowerCase()}s matched this view</h2>
             <p className="mt-3 max-w-lg text-sm leading-7 text-slate-500">
               Adjust the search term or filter, or upload a new audit if this workspace does not
-              have candidate data yet.
+              have {subjectLabel.toLowerCase()} data yet.
             </p>
             <Link
               to="/audit"
@@ -181,11 +234,11 @@ function Candidates() {
               <table className="min-w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500">
-                    <th className="px-3 py-3 font-semibold">Name</th>
-                    <th className="px-3 py-3 font-semibold">Gender</th>
-                    <th className="px-3 py-3 font-semibold">Ethnicity</th>
-                    <th className="px-3 py-3 font-semibold">Experience</th>
-                    <th className="px-3 py-3 font-semibold">Decision</th>
+                    <th className="px-3 py-3 font-semibold">{columnMap.name || "name"}</th>
+                    <th className="px-3 py-3 font-semibold">{primaryProtected}</th>
+                    <th className="px-3 py-3 font-semibold">{secondaryProtected}</th>
+                    <th className="px-3 py-3 font-semibold">{primaryFeature}</th>
+                    <th className="px-3 py-3 font-semibold">{outcomeLabel}</th>
                     <th className="px-3 py-3 font-semibold">Bias Flag</th>
                   </tr>
                 </thead>
@@ -196,10 +249,10 @@ function Candidates() {
                       onClick={() => handleCandidateSelect(candidate)}
                       className="cursor-pointer border-b border-slate-100 transition hover:bg-amber/5"
                     >
-                      <td className="px-3 py-4 font-medium text-slate-900">{candidate.name}</td>
-                      <td className="px-3 py-4 text-slate-600">{candidate.gender}</td>
-                      <td className="px-3 py-4 text-slate-600">{candidate.ethnicity}</td>
-                      <td className="px-3 py-4 text-slate-600">{candidate.years_experience} years</td>
+                      <td className="px-3 py-4 font-medium text-slate-900">{getValue(candidate, "name")}</td>
+                      <td className="px-3 py-4 text-slate-600">{String(getValue(candidate, primaryProtected))}</td>
+                      <td className="px-3 py-4 text-slate-600">{String(getValue(candidate, secondaryProtected))}</td>
+                      <td className="px-3 py-4 text-slate-600">{String(getValue(candidate, primaryFeature))}</td>
                       <td className="px-3 py-4">
                         <span
                           className={`rounded-full px-3 py-1 font-semibold ${
@@ -208,7 +261,7 @@ function Candidates() {
                               : "bg-rose-100 text-rose-700"
                           }`}
                         >
-                          {candidate.original_decision ? "Hired" : "Rejected"}
+                          {candidate.original_decision ? outcomeLabel : `Not ${outcomeLabel}`}
                         </span>
                       </td>
                       <td className="px-3 py-4">
@@ -295,7 +348,7 @@ function Candidates() {
                             </Dialog.Title>
                             <p className="mt-2 text-sm text-slate-500">
                               {selectedCandidate?.gender} • {selectedCandidate?.ethnicity} •{" "}
-                              {selectedCandidate?.years_experience} years experience
+                              {String(getValue(selectedCandidate, primaryFeature))}
                             </p>
                           </div>
                           <button
@@ -312,7 +365,7 @@ function Candidates() {
                         {panelLoading && (
                           <div className="flex items-center gap-3 rounded-3xl border border-slate-200 bg-white p-5 text-sm text-slate-600">
                             <Spinner className="h-5 w-5 text-navy" />
-                            Loading fresh candidate explainability data...
+                            Loading fresh {subjectLabel.toLowerCase()} explainability data...
                           </div>
                         )}
 
@@ -328,15 +381,15 @@ function Candidates() {
 
                         <div className="grid gap-4 md:grid-cols-3">
                           <div className="rounded-3xl border border-slate-200 bg-white p-4">
-                            <p className="text-sm font-medium text-slate-500">Education</p>
+                            <p className="text-sm font-medium text-slate-500">{secondaryFeature}</p>
                             <p className="mt-2 text-lg font-bold text-slate-900">
-                              {selectedCandidate?.education_level}
+                              {String(getValue(selectedCandidate, secondaryFeature))}
                             </p>
                           </div>
                           <div className="rounded-3xl border border-slate-200 bg-white p-4">
                             <p className="text-sm font-medium text-slate-500">Original Decision</p>
                             <p className="mt-2 text-lg font-bold text-slate-900">
-                              {selectedCandidate?.original_decision ? "Hired" : "Rejected"}
+                              {selectedCandidate?.original_decision ? outcomeLabel : `Not ${outcomeLabel}`}
                             </p>
                           </div>
                           <div className="rounded-3xl border border-slate-200 bg-white p-4">

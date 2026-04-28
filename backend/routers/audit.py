@@ -1,4 +1,5 @@
 from io import BytesIO
+from typing import Any
 from uuid import UUID
 
 import pandas as pd
@@ -7,9 +8,16 @@ from sqlalchemy.orm import Session, joinedload
 
 from agent.memory_store import store_memory
 from database import get_db
+from domain_config import (
+    DomainConfig,
+    detect_domain,
+    list_domain_templates,
+    parse_domain_config_payload,
+    validate_required_columns,
+)
 from ml.bias_detector import run_bias_detection
-from ml.cultural_audit import run_cultural_bias_scan
 from ml.counterfactual import generate_counterfactual
+from ml.cultural_audit import run_cultural_bias_scan
 from ml.explainer import explain_candidate
 from ml.multimodal_audit import analyze_multimodal_submission
 from models import Audit, Candidate, User
@@ -20,15 +28,6 @@ from utils import metric_payload, serialize_audit, serialize_candidate, to_seria
 
 router = APIRouter()
 
-REQUIRED_COLUMNS = {
-    "name",
-    "gender",
-    "age",
-    "ethnicity",
-    "years_experience",
-    "education_level",
-    "hired",
-}
 OPTIONAL_COLUMNS = {
     "skills": "",
     "previous_companies": "",
@@ -40,6 +39,7 @@ OPTIONAL_COLUMNS = {
     "email": "",
     "phone": "",
 }
+
 EXCLUDED_CANDIDATE_FEATURE_COLUMNS = {
     "name",
     "gender",
@@ -52,23 +52,102 @@ EXCLUDED_CANDIDATE_FEATURE_COLUMNS = {
     "hired",
 }
 
+CANONICAL_DEFAULTS: dict[str, Any] = {
+    "name": "Unknown",
+    "gender": "Unknown",
+    "age": 0,
+    "ethnicity": "Unknown",
+    "years_experience": 0.0,
+    "education_level": "Unknown",
+    "hired": 0,
+}
 
-def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+
+def _normalize_column_name(column_name: Any) -> str:
+    return (
+        str(column_name)
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+
+def _normalized_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     prepared = df.copy()
-    prepared.columns = [column.strip() for column in prepared.columns]
-    missing_required = REQUIRED_COLUMNS - set(prepared.columns)
-    if missing_required:
-        missing = ", ".join(sorted(missing_required))
+    prepared.columns = [_normalize_column_name(column) for column in prepared.columns]
+    if len(set(prepared.columns)) != len(prepared.columns):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Uploaded CSV is missing required columns: {missing}",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "invalid_schema",
+                "message": "Uploaded CSV has duplicate columns after normalization.",
+            },
         )
+    return prepared
+
+
+def _schema_error_payload(config: DomainConfig, missing_columns: list[str], found_columns: list[str]) -> dict[str, Any]:
+    return {
+        "error": "invalid_schema",
+        "domain": config.domain,
+        "missing_columns": missing_columns,
+        "found_columns": found_columns,
+        "message": (
+            f"Your CSV is missing {len(missing_columns)} required columns for the "
+            f"{config.display_name} domain."
+        ),
+    }
+
+
+def _build_canonical_dataframe(df: pd.DataFrame, config: DomainConfig) -> pd.DataFrame:
+    prepared = _normalized_dataframe(df)
+
+    canonical: dict[str, Any] = {}
+    for canonical_column in (
+        "name",
+        "gender",
+        "age",
+        "ethnicity",
+        "years_experience",
+        "education_level",
+        "hired",
+    ):
+        source_column = _normalize_column_name(config.column_map.get(canonical_column, canonical_column))
+        if source_column in prepared.columns:
+            canonical[canonical_column] = prepared[source_column]
+        else:
+            canonical[canonical_column] = CANONICAL_DEFAULTS[canonical_column]
+
+    canonical_df = pd.DataFrame(canonical)
 
     for column, default_value in OPTIONAL_COLUMNS.items():
-        if column not in prepared.columns:
-            prepared[column] = default_value
+        if column in prepared.columns:
+            canonical_df[column] = prepared[column]
+        else:
+            canonical_df[column] = default_value
 
-    return prepared
+    for column in prepared.columns:
+        if column in canonical_df.columns:
+            continue
+        canonical_df[column] = prepared[column]
+
+    return canonical_df
+
+
+@router.get("/templates")
+def list_templates_compat():
+    templates = list_domain_templates()
+    return {
+        "templates": {
+            template.domain: {
+                "label": template.display_name,
+                "description": f"{template.display_name} schema preset",
+                "required_columns": template.required_columns,
+            }
+            for template in templates
+        }
+    }
 
 
 @router.get("/list", response_model=list[AuditResponse])
@@ -89,10 +168,12 @@ def list_audits(
 @router.post("/upload", response_model=BiasReport)
 async def upload_audit(
     file: UploadFile = File(...),
+    domain: str = Form(default=""),
+    domain_config: str = Form(default=""),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    filename = file.filename or "uploaded_candidates.csv"
+    filename = file.filename or "uploaded_dataset.csv"
     if not filename.lower().endswith(".csv"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only CSV uploads are supported.")
 
@@ -102,29 +183,60 @@ async def upload_audit(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not parse the uploaded CSV.") from exc
 
-    prepared_df = _prepare_dataframe(dataframe)
+    fallback_domain = domain.strip() or None
+    parsed_config = parse_domain_config_payload(
+        domain_config_payload=domain_config.strip() or None,
+        fallback_domain=fallback_domain,
+        csv_columns=list(dataframe.columns),
+    )
+
+    missing_columns, found_columns = validate_required_columns(parsed_config, list(dataframe.columns))
+    if missing_columns:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_schema_error_payload(parsed_config, missing_columns, found_columns),
+        )
+
+    auto_detected_domain = False
+    if not fallback_domain and not domain_config.strip():
+        auto_detected_domain = detect_domain(list(dataframe.columns)) is not None
+
+    canonical_df = _build_canonical_dataframe(dataframe, parsed_config)
+
     try:
-        detection_result = run_bias_detection(prepared_df)
+        detection_result = run_bias_detection(
+            canonical_df,
+            label_column=parsed_config.outcome_column if parsed_config.outcome_column in canonical_df.columns else "hired",
+            protected_attributes=parsed_config.protected_attributes,
+            outcome_positive_value=parsed_config.outcome_positive_value,
+            feature_columns=parsed_config.feature_columns,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     try:
-        cultural_scan = run_cultural_bias_scan(prepared_df)
+        cultural_scan = run_cultural_bias_scan(
+            canonical_df,
+            decision_column=parsed_config.outcome_column if parsed_config.outcome_column in canonical_df.columns else "hired",
+            positive_value=parsed_config.outcome_positive_value,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     metrics = metric_payload(detection_result)
+    parsed_config_payload = parsed_config.model_dump(mode="json")
 
     audit = Audit(
         user_id=current_user.id,
         dataset_name=filename,
-        total_candidates=len(prepared_df),
+        total_candidates=len(canonical_df),
         disparate_impact=metrics["disparate_impact"],
         stat_parity_diff=metrics["stat_parity_diff"],
         equal_opp_diff=metrics["equal_opp_diff"],
         avg_odds_diff=metrics["avg_odds_diff"],
         bias_detected=bool(detection_result["bias_detected"]),
         mitigation_applied=False,
+        domain_config=parsed_config_payload,
     )
     db.add(audit)
     db.flush()
@@ -145,8 +257,12 @@ async def upload_audit(
             row.to_dict(),
             detection_result["label_encoders"],
             detection_result["majority_values"],
+            label_column=detection_result.get("label_column", "hired"),
+            protected_attributes=parsed_config.protected_attributes,
+            model_feature_names=detection_result.get("feature_names", []),
         )
-        original_decision = bool(int(row["hired"]))
+        decision_column = detection_result.get("label_column", "hired")
+        original_decision = bool(int(row.get(decision_column, row.get("hired", 0))))
         bias_flagged = bool(counterfactual["bias_detected"] or explanation["proxy_flags"])
 
         candidate = Candidate(
@@ -186,6 +302,10 @@ async def upload_audit(
             "bias_detected": bool(detection_result["bias_detected"]),
             "candidate_count": len(candidates),
             "high_risk_cultural_dimensions": ",".join(cultural_scan["high_risk_dimensions"]),
+            "domain": parsed_config.domain,
+            "configured_outcome_column": parsed_config.outcome_column,
+            "configured_protected_attrs": ",".join(parsed_config.protected_attributes),
+            "auto_detected_domain": auto_detected_domain,
         },
     )
 
@@ -203,6 +323,17 @@ async def upload_audit(
                 if candidate.shap_values and candidate.shap_values.get("proxy_flags")
             ),
             "fairness_score": serialize_audit(audit)["fairness_score"],
+            "domain": parsed_config.domain,
+            "domain_label": parsed_config.display_name,
+            "schema_config": {
+                "outcome_column": parsed_config.outcome_column,
+                "outcome_positive_value": parsed_config.outcome_positive_value,
+                "protected_attributes": parsed_config.protected_attributes,
+                "feature_columns": parsed_config.feature_columns,
+                "subject_label": parsed_config.subject_label,
+                "outcome_label": parsed_config.outcome_label,
+            },
+            "auto_detected_domain": auto_detected_domain,
             "cultural_scan": cultural_scan,
             "reasoning_log_preview": [
                 candidate.shap_values.get("reasoning_log", "")
@@ -264,6 +395,18 @@ async def upload_multimodal_audit(
         avg_odds_diff=0.0,
         bias_detected=analysis["risk_score"] >= 50,
         mitigation_applied=False,
+        domain_config={
+            "domain": "custom",
+            "display_name": "Multimodal",
+            "subject_label": "Interview",
+            "outcome_label": "Risk",
+            "outcome_column": "risk_score",
+            "outcome_positive_value": 1,
+            "protected_attributes": ["gender", "ethnicity"],
+            "feature_columns": ["transcript", "background"],
+            "required_columns": [],
+            "column_map": {},
+        },
     )
     db.add(pseudo_audit)
     db.flush()

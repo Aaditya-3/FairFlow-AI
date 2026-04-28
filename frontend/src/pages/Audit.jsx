@@ -1,71 +1,194 @@
-import { CheckCircle2, ChevronRight, LockKeyhole, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { CheckCircle2, ChevronRight, LockKeyhole, Sparkles, XCircle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
 
-import { LAST_AUDIT_STORAGE_KEY, uploadAudit } from "../api/fairlensApi";
+import { LAST_AUDIT_STORAGE_KEY, getAuditTemplates, uploadAudit } from "../api/fairlensApi";
 import CSVUploader from "../components/CSVUploader";
+import DomainSelector from "../components/DomainSelector";
 import FairnessReportCard from "../components/FairnessReportCard";
 import LocalWasmPrecheckCard from "../components/LocalWasmPrecheckCard";
 import { buildEthosInputFromCsvText } from "../wasm/csvAuditInput";
 import { runEthosPipeline } from "../wasm/ethosEngine";
 import { sanitizeCsvForUpload } from "../wasm/privacyShield";
 
-const steps = [
-  { id: 1, label: "Upload" },
-  { id: 2, label: "Analyzing" },
-  { id: 3, label: "Results" }
+const wizardSteps = [
+  { id: 1, label: "Domain Selection" },
+  { id: 2, label: "CSV Upload" }
 ];
+
+const normalizeHeader = (header) =>
+  String(header || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/-/g, "_");
+
+const parseCsvList = (value) =>
+  String(value || "")
+    .split(",")
+    .map((item) => normalizeHeader(item))
+    .filter(Boolean);
 
 function Audit() {
   const navigate = useNavigate();
+  const [step, setStep] = useState(1);
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [report, setReport] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [activeStep, setActiveStep] = useState(1);
   const [localPrecheck, setLocalPrecheck] = useState(null);
   const [proxyColumn, setProxyColumn] = useState("years_experience");
   const [privacySummary, setPrivacySummary] = useState(null);
+  const [headerValidation, setHeaderValidation] = useState({ found: [], missing: [], allHeaders: [] });
+  const [outcomeColumn, setOutcomeColumn] = useState("hired");
+  const [protectedAttrs, setProtectedAttrs] = useState("gender,ethnicity,age");
+  const [featureColumns, setFeatureColumns] = useState("years_experience,education_level");
+  const [requiredColumns, setRequiredColumns] = useState("");
+  const [subjectLabel, setSubjectLabel] = useState("Candidate");
+  const [outcomeLabel, setOutcomeLabel] = useState("Hired");
+  const [outcomePositiveValue, setOutcomePositiveValue] = useState("1");
+  const [showAdvancedSchema, setShowAdvancedSchema] = useState(false);
+
+  useEffect(() => {
+    const loadTemplates = async () => {
+      try {
+        const payload = await getAuditTemplates();
+        const loaded = payload?.templates || [];
+        setTemplates(loaded);
+        const defaultTemplate = loaded.find((item) => item.domain === "hiring") || loaded[0] || null;
+        if (defaultTemplate) {
+          setSelectedTemplate(defaultTemplate);
+          setOutcomeColumn(defaultTemplate.outcome_column || "hired");
+          setProtectedAttrs((defaultTemplate.protected_attributes || ["gender"]).join(","));
+          setFeatureColumns((defaultTemplate.feature_columns || []).join(","));
+          setRequiredColumns((defaultTemplate.required_columns || []).join(","));
+          setSubjectLabel(defaultTemplate.subject_label || "Candidate");
+          setOutcomeLabel(defaultTemplate.outcome_label || "Hired");
+          setOutcomePositiveValue(String(defaultTemplate.outcome_positive_value ?? 1));
+        }
+      } catch (error) {
+        setTemplates([]);
+        setSelectedTemplate(null);
+      }
+    };
+    loadTemplates();
+  }, []);
+
+  const currentStepLabel = wizardSteps.find((item) => item.id === step)?.label || "";
+
+  const setDomain = (template) => {
+    setSelectedTemplate(template);
+    setOutcomeColumn(template.outcome_column || "hired");
+    setProtectedAttrs((template.protected_attributes || ["gender"]).join(","));
+    setFeatureColumns((template.feature_columns || []).join(","));
+    setRequiredColumns((template.required_columns || []).join(","));
+    setSubjectLabel(template.subject_label || "Record");
+    setOutcomeLabel(template.outcome_label || "Outcome");
+    setOutcomePositiveValue(String(template.outcome_positive_value ?? 1));
+    setHeaderValidation({ found: [], missing: [], allHeaders: [] });
+  };
+
+  const handleFileSelected = async (file) => {
+    if (!selectedTemplate) {
+      return;
+    }
+    try {
+      const text = await file.text();
+      const firstLine = text.split(/\r?\n/).find((line) => line.trim().length > 0) || "";
+      const headers = firstLine.split(",").map((header) => normalizeHeader(header));
+      const selectedRequiredColumns = parseCsvList(requiredColumns);
+      const required = selectedRequiredColumns.length
+        ? selectedRequiredColumns
+        : (selectedTemplate.required_columns || []).map((column) => normalizeHeader(column));
+      const missing = required.filter((column) => !headers.includes(column));
+      const found = required.filter((column) => headers.includes(column));
+      setHeaderValidation({ found, missing, allHeaders: headers });
+    } catch (error) {
+      setHeaderValidation({ found: [], missing: ["Could not parse headers"], allHeaders: [] });
+    }
+  };
 
   const handleUpload = async (file) => {
+    const selectedRequiredColumns = parseCsvList(requiredColumns);
+    if (selectedTemplate && selectedRequiredColumns.length > 0 && headerValidation.missing.length > 0) {
+      throw new Error(`Missing required columns: ${headerValidation.missing.join(", ")}`);
+    }
+
     setUploading(true);
-    setActiveStep(2);
     let csvText = "";
 
     try {
       csvText = await file.text();
+      const parsedProtectedAttrs = parseCsvList(protectedAttrs);
+      const parsedFeatureColumns = parseCsvList(featureColumns);
       const localInput = buildEthosInputFromCsvText(csvText, {
-        proxyColumn: "years_experience"
+        requiredHeaders: selectedRequiredColumns.length ? selectedRequiredColumns : undefined,
+        protectedColumn: parsedProtectedAttrs[0] || "gender",
+        outcomeColumn: normalizeHeader(outcomeColumn) || "hired",
+        outcomePositiveValue,
+        proxyColumn: parsedFeatureColumns[0] || "years_experience"
       });
       const localResult = await runEthosPipeline(localInput);
       setLocalPrecheck(localResult);
       setProxyColumn(localInput.proxyColumn);
     } catch (error) {
       setLocalPrecheck(null);
-      setProxyColumn("years_experience");
     }
 
     const formData = new FormData();
     let privacyStats = null;
+
     try {
       const sanitized = await sanitizeCsvForUpload(csvText || (await file.text()));
       privacyStats = sanitized.stats;
       setPrivacySummary(privacyStats);
-      const sanitizedFile = new File([sanitized.csvText], file.name, {
-        type: "text/csv"
-      });
+      const sanitizedFile = new File([sanitized.csvText], file.name, { type: "text/csv" });
       formData.append("file", sanitizedFile);
     } catch (error) {
       setPrivacySummary(null);
       formData.append("file", file);
     }
 
+    const parsedProtectedAttrs = parseCsvList(protectedAttrs);
+    const parsedFeatureColumns = parseCsvList(featureColumns);
+
+    if (selectedTemplate) {
+      formData.append("domain", selectedTemplate.domain);
+      formData.append(
+        "domain_config",
+        JSON.stringify({
+          domain: selectedTemplate.domain,
+          display_name:
+            selectedTemplate.domain === "custom"
+              ? subjectLabel || "Custom"
+              : selectedTemplate.display_name || "Custom",
+          outcome_column: normalizeHeader(outcomeColumn) || selectedTemplate.outcome_column,
+          outcome_positive_value: Number.isNaN(Number(outcomePositiveValue))
+            ? outcomePositiveValue
+            : Number(outcomePositiveValue),
+          protected_attributes: parsedProtectedAttrs.length
+            ? parsedProtectedAttrs
+            : selectedTemplate.protected_attributes,
+          feature_columns: parsedFeatureColumns.length ? parsedFeatureColumns : selectedTemplate.feature_columns || [],
+          outcome_label: outcomeLabel || selectedTemplate.outcome_label,
+          subject_label: subjectLabel || selectedTemplate.subject_label,
+          required_columns: selectedRequiredColumns.length
+            ? selectedRequiredColumns
+            : selectedTemplate.required_columns || [],
+          column_map: selectedTemplate.column_map || {}
+        })
+      );
+    }
+
     try {
       const response = await uploadAudit(formData);
       setReport(response);
-      setActiveStep(3);
       localStorage.setItem(LAST_AUDIT_STORAGE_KEY, response.audit.id);
       toast.success(
-        `Upload completed. ${response?.summary?.total_candidates ?? 0} candidates analyzed${
+        `Upload completed. ${response?.summary?.total_candidates ?? 0} ${
+          selectedTemplate.subject_label || "records"
+        } analyzed${
           privacyStats && privacyStats.fieldsHashed > 0
             ? `, ${privacyStats.fieldsHashed} PII fields hashed locally`
             : ""
@@ -73,12 +196,28 @@ function Audit() {
       );
       return response;
     } catch (error) {
-      setActiveStep(1);
+      const missingColumns = error?.response?.data?.detail?.missing_columns;
+      if (Array.isArray(missingColumns) && missingColumns.length > 0) {
+        throw new Error(`Missing columns: ${missingColumns.join(", ")}`);
+      }
       throw error;
     } finally {
       setUploading(false);
     }
   };
+
+  const headerRows = useMemo(() => {
+    const selectedRequiredColumns = parseCsvList(requiredColumns);
+    if (!selectedRequiredColumns.length && !selectedTemplate?.required_columns) {
+      return [];
+    }
+    const requiredSource = selectedRequiredColumns.length ? selectedRequiredColumns : selectedTemplate.required_columns;
+    return requiredSource.map((column) => {
+      const normalized = normalizeHeader(column);
+      const present = headerValidation.found.includes(normalized);
+      return { column, present };
+    });
+  }, [headerValidation.found, requiredColumns, selectedTemplate]);
 
   return (
     <div className="space-y-6">
@@ -86,14 +225,13 @@ function Audit() {
         <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-amber-dark">New Audit</p>
-            <h1 className="mt-4 text-4xl font-extrabold text-slate-900">Upload a hiring dataset for review</h1>
+            <h1 className="mt-4 text-4xl font-extrabold text-slate-900">Domain-agnostic fairness upload</h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-600">
-              FairFlow AI will train a hiring decision model, compute fairness metrics, generate
-              candidate explanations, and flag protected-attribute counterfactual risks.
+              Step {step} of 2: {currentStepLabel}. Configure domain schema first, then upload CSV for fairness analysis.
             </p>
             <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
               <LockKeyhole className="h-4 w-4" />
-              Zero Data Egress: Local Browser Fairness Precheck
+              Zero Data Egress: Local Browser Privacy Shield
             </div>
           </div>
           <div className="rounded-3xl bg-navy p-5 text-white shadow-glow">
@@ -101,18 +239,18 @@ function Audit() {
               <Sparkles className="h-6 w-6 text-amber-light" />
               <div>
                 <p className="text-sm font-semibold">Audit Workflow</p>
-                <p className="text-sm text-slate-300">CSV upload to mitigation-ready results</p>
+                <p className="text-sm text-slate-300">Domain template -> CSV validation -> fairness report</p>
               </div>
             </div>
           </div>
         </div>
 
         <div className="mt-8 flex flex-wrap gap-4">
-          {steps.map((step, index) => {
-            const isComplete = activeStep > step.id;
-            const isActive = activeStep === step.id;
+          {wizardSteps.map((wizardStep, index) => {
+            const isComplete = step > wizardStep.id;
+            const isActive = step === wizardStep.id;
             return (
-              <div key={step.id} className="flex items-center gap-4">
+              <div key={wizardStep.id} className="flex items-center gap-4">
                 <div
                   className={`flex h-12 w-12 items-center justify-center rounded-full border-2 text-sm font-bold ${
                     isComplete
@@ -122,49 +260,218 @@ function Audit() {
                         : "border-slate-200 bg-white text-slate-400"
                   }`}
                 >
-                  {isComplete ? <CheckCircle2 className="h-5 w-5" /> : step.id}
+                  {isComplete ? <CheckCircle2 className="h-5 w-5" /> : wizardStep.id}
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">{step.label}</p>
-                </div>
-                {index < steps.length - 1 && <ChevronRight className="h-4 w-4 text-slate-300" />}
+                <p className="text-sm font-semibold text-slate-900">{wizardStep.label}</p>
+                {index < wizardSteps.length - 1 && <ChevronRight className="h-4 w-4 text-slate-300" />}
               </div>
             );
           })}
         </div>
       </div>
 
-      <CSVUploader onUpload={handleUpload} uploading={uploading} />
-      {privacySummary && (
-        <section className="section-card border border-emerald-200 bg-emerald-50/60">
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Privacy Shield</p>
-          <h3 className="mt-2 text-2xl font-bold text-slate-900">Local PII hashing applied before upload</h3>
-          <p className="mt-3 text-sm leading-7 text-slate-700">
-            Rows processed: <span className="font-semibold">{privacySummary.rowsProcessed}</span> • Fields hashed:{" "}
-            <span className="font-semibold">{privacySummary.fieldsHashed}</span>
-          </p>
-          {privacySummary.columnsHashed?.length > 0 && (
-            <p className="mt-2 text-sm text-slate-700">
-              Columns protected:{" "}
-              <span className="font-semibold">{privacySummary.columnsHashed.join(", ")}</span>
-            </p>
-          )}
-        </section>
+      {step === 1 && (
+        <>
+          <DomainSelector templates={templates} selectedDomain={selectedTemplate?.domain} onSelect={setDomain} />
+          <div className="flex justify-end">
+            <button
+              type="button"
+              disabled={!selectedTemplate}
+              onClick={() => setStep(2)}
+              className="rounded-2xl bg-navy px-5 py-3 text-sm font-semibold text-white transition hover:bg-navy-light disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              Continue to Upload
+            </button>
+          </div>
+        </>
       )}
-      <LocalWasmPrecheckCard result={localPrecheck} proxyColumn={proxyColumn} />
 
-      {!report && (
+      {step === 2 && (
+        <>
+          <section className="section-card border border-slate-200 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-dark">Step 2 of 2</p>
+                <h3 className="mt-2 text-2xl font-bold text-slate-900">
+                  Expected columns for {selectedTemplate?.display_name || "Selected Domain"}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
+              >
+                Back to Domain Selection
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Outcome Column</span>
+                <input
+                  value={outcomeColumn}
+                  onChange={(event) => setOutcomeColumn(event.target.value)}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-900"
+                />
+              </label>
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Protected Attributes
+                </span>
+                <input
+                  value={protectedAttrs}
+                  onChange={(event) => setProtectedAttrs(event.target.value)}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-900"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Advanced Schema Controls
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedSchema((current) => !current)}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-amber/50 hover:text-amber-dark"
+                >
+                  {showAdvancedSchema ? "Hide" : "Show"}
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                Use advanced controls only if your organization needs custom labels or column remapping.
+              </p>
+            </div>
+
+            {showAdvancedSchema && (
+              <>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                      Feature Columns
+                    </span>
+                    <input
+                      value={featureColumns}
+                      onChange={(event) => setFeatureColumns(event.target.value)}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-900"
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                      Required Columns
+                    </span>
+                    <input
+                      value={requiredColumns}
+                      onChange={(event) => setRequiredColumns(event.target.value)}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-900"
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-3">
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                      Subject Label
+                    </span>
+                    <input
+                      value={subjectLabel}
+                      onChange={(event) => setSubjectLabel(event.target.value)}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-900"
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                      Outcome Label
+                    </span>
+                    <input
+                      value={outcomeLabel}
+                      onChange={(event) => setOutcomeLabel(event.target.value)}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-900"
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                      Positive Outcome Value
+                    </span>
+                    <input
+                      value={outcomePositiveValue}
+                      onChange={(event) => setOutcomePositiveValue(event.target.value)}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-900"
+                    />
+                  </label>
+                </div>
+              </>
+            )}
+
+            <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-5">
+              <p className="text-sm font-semibold text-slate-800">Client-side schema check</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {headerRows.map((row) => (
+                  <div
+                    key={row.column}
+                    className={`flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm ${
+                      row.present
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                        : "border-rose-200 bg-rose-50 text-rose-700"
+                    }`}
+                  >
+                    {row.present ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                    <span>{row.column}</span>
+                  </div>
+                ))}
+              </div>
+              {headerValidation.missing.length > 0 && (
+                <p className="mt-4 text-sm text-rose-700">
+                  Add these columns to your CSV and try again: {headerValidation.missing.join(", ")}
+                </p>
+              )}
+              {headerValidation.allHeaders.length > 0 && headerValidation.missing.length === 0 && (
+                <p className="mt-4 text-sm text-emerald-700">All required columns are present.</p>
+              )}
+            </div>
+          </section>
+
+          <CSVUploader
+            onUpload={handleUpload}
+            onFileSelected={handleFileSelected}
+            uploading={uploading}
+            domainLabel={selectedTemplate?.display_name || "dataset"}
+            expectedColumns={parseCsvList(requiredColumns)}
+          />
+
+          {privacySummary && (
+            <section className="section-card border border-emerald-200 bg-emerald-50/60">
+              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Privacy Shield</p>
+              <h3 className="mt-2 text-2xl font-bold text-slate-900">Local PII hashing applied before upload</h3>
+              <p className="mt-3 text-sm leading-7 text-slate-700">
+                Rows processed: <span className="font-semibold">{privacySummary.rowsProcessed}</span> • Fields hashed:{" "}
+                <span className="font-semibold">{privacySummary.fieldsHashed}</span>
+              </p>
+            </section>
+          )}
+
+          <LocalWasmPrecheckCard result={localPrecheck} proxyColumn={proxyColumn} />
+        </>
+      )}
+
+      {!report && step === 2 && (
         <div className="section-card text-center">
           <h2 className="text-2xl font-bold text-slate-900">Waiting for a dataset</h2>
           <p className="mt-3 text-sm leading-7 text-slate-500">
-            Drop a CSV above to generate fairness metrics, candidate-level SHAP explanations, and
-            a full mitigation-ready bias report.
+            Select a CSV and start upload to generate fairness metrics and mitigation-ready insights.
           </p>
         </div>
       )}
 
       {report && (
         <>
+          {report?.summary?.auto_detected_domain && (
+            <section className="section-card border border-blue-200 bg-blue-50 text-blue-800">
+              We detected this looks like a {report?.summary?.domain_label || "preset"} dataset. Using the{" "}
+              {report?.summary?.domain_label || "selected"} preset.
+            </section>
+          )}
           <FairnessReportCard metrics={report.metrics} />
 
           <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
@@ -173,7 +480,7 @@ function Audit() {
               <h3 className="mt-2 text-2xl font-bold text-slate-900">Audit completed successfully</h3>
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
                 <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
-                  <p className="text-sm font-medium text-slate-500">Candidates analyzed</p>
+                  <p className="text-sm font-medium text-slate-500">Records analyzed</p>
                   <p className="mt-2 text-3xl font-extrabold text-slate-900">{report.summary.total_candidates}</p>
                 </div>
                 <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
@@ -181,19 +488,6 @@ function Audit() {
                   <p className="mt-2 text-3xl font-extrabold text-slate-900">{report.summary.bias_flags}</p>
                 </div>
               </div>
-              <div className="mt-6 rounded-3xl bg-amber/10 p-5 text-sm leading-7 text-slate-700">
-                This dataset scored {Math.round(report.audit.fairness_score)} out of 100. You can
-                move into candidate review or immediately compare mitigation strategies.
-              </div>
-              {report.summary?.cultural_scan && (
-                <div className="mt-6 rounded-3xl border border-indigo-200 bg-indigo-50 p-5 text-sm leading-7 text-slate-700">
-                  IndiCASA cultural scan:{" "}
-                  <span className="font-semibold">
-                    {report.summary.cultural_scan.high_risk_count}
-                  </span>{" "}
-                  high-risk dimension(s) detected ({report.summary.cultural_scan.engine}).
-                </div>
-              )}
             </div>
 
             <div className="section-card">
@@ -205,27 +499,16 @@ function Audit() {
                   onClick={() => navigate(`/mitigate/${report.audit.id}`)}
                   className="rounded-3xl bg-navy p-6 text-left text-white transition hover:bg-navy-light"
                 >
-                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-light">
-                    Mitigation Center
-                  </p>
+                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-light">Mitigation Center</p>
                   <h4 className="mt-3 text-2xl font-bold">Apply Mitigation</h4>
-                  <p className="mt-3 text-sm leading-7 text-slate-300">
-                    Run all three mitigation strategies and compare the fairness uplift before
-                    modifying rankings.
-                  </p>
                 </button>
                 <button
                   type="button"
                   onClick={() => navigate(`/candidates/${report.audit.id}`)}
                   className="rounded-3xl border border-slate-200 bg-white p-6 text-left transition hover:border-amber/50 hover:bg-amber/5"
                 >
-                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-dark">
-                    Candidate Explorer
-                  </p>
-                  <h4 className="mt-3 text-2xl font-bold text-slate-900">View Candidates</h4>
-                  <p className="mt-3 text-sm leading-7 text-slate-600">
-                    Drill into SHAP explanations, proxy risk flags, and candidate counterfactuals.
-                  </p>
+                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-dark">Explorer</p>
+                  <h4 className="mt-3 text-2xl font-bold text-slate-900">View Records</h4>
                 </button>
               </div>
             </div>

@@ -1,44 +1,44 @@
-# User Test 3 — Hospital IT Officer Testing ER Triage Fairness
+# User Test 3 - Medical Triage Workflow Session Notes
 
-**Date:** 2025-01-09
-**Tester Persona:** Maria Gonzalez, 38, Hospital IT Officer
-**Technical Level:** Intermediate
-**Session Duration:** 29 minutes
+**Date:** 2025-01-09  
+**Participant:** Maria Gonzalez, 38, Hospital IT Officer  
+**Technical level:** Intermediate  
+**Device:** Android phone  
+**Dataset:** 892 triage records  
+**Session length:** 29 minutes
 
-## Task Given
-"Audit our emergency-room triage model and determine whether any
-patients are being deprioritized unfairly because of age, insurance
-status, or other protected characteristics."
+## Session Goal
 
-## Steps Followed
-1. Opened the app on an Android device during an internal digital-health review
-2. Signed in with Google and loaded the upload screen
-3. Uploaded a triage CSV with 892 patient records
-4. Named the model "ER Priority Model Beta"
-5. Waited 44 seconds for the audit to finish
-6. Read Gemini explanation and immediately understood the core risk
-7. Reviewed SHAP chart and saw "age" and "insurance_status" as dominant drivers
-8. Opened the PDF report and sent it to the chief medical officer
+Maria's task was to audit an emergency-room triage model and determine whether patients were being deprioritized unfairly because of age, insurance status, or other protected characteristics.
 
-## Issues Encountered
-- Wanted stronger visual emphasis when a severe bias score is detected
-  → FIX NEEDED: Add emergency banner styling for high-risk healthcare audits
-- Needed one-tap export of the top harmful features for internal memos
-  → FIX NEEDED: Add copy-summary action beside Gemini explanation
+## Session Notes
 
-## Outcome
-✅ Task completed successfully
-Bias detected: YES — age + insurance_status reduced priority for elderly uninsured patients
-SDG 10.3 Relevance: Direct — equal treatment and access to care
-SDG 3 Relevance: Direct — health outcomes are affected by triage bias
+- Maria ran the session on Android during an internal digital-health review, uploaded the triage CSV, and labeled the model `ER Priority Model Beta` so the report would be recognizable when forwarded internally.
+- The full audit took 44 seconds. She accepted the wait, but wanted the report to communicate urgency much more aggressively once a severe result appeared because healthcare reviewers should not need to read every paragraph before understanding the risk level.
+- The Gemini explanation gave her the first clear read on the problem. She understood the patient-safety implication before touching the deeper charts.
+- The SHAP chart then made the issue defensible: `age` and `insurance_status` were the dominant drivers, which aligned with the exact fairness concern the hospital team wanted to test.
+- Maria could share the PDF immediately, but she still wanted the most harmful features surfaced more prominently so they could be quoted in internal care-review memos without extra interpretation.
+- She sent the report to the chief medical officer during the session because the finding was serious enough to escalate immediately.
 
-## Tester Feedback Quote
-"The model was deprioritizing elderly uninsured patients — this could cost lives.
-We needed something that made the risk obvious in minutes, and this did."
+## What Broke
 
-## Screenshot Placeholder
-[screenshot_test3_medical_report.png]
+- A severe healthcare bias finding did not feel visually urgent enough at first glance; the team wanted the high-risk state to be unmistakable before anyone parsed the details.
+- Sharing the full report was easy, but extracting the top harmful factors for internal review still depended on a human summarizing the result.
 
-## Improvements Made After This Test
-- Added more prominent severe-risk styling for medical triage audits
-- Planned a one-tap summary export for governance and care-review teams
+## What We Changed
+
+- Elevated the high-risk state in the report summary with explicit severity labeling, stronger color treatment, and a bias gauge so dangerous audits read as urgent on first view.
+- Exposed PDF sharing in two places - the app bar and the sticky footer - so escalation can happen from the same screen without hunting for the action.
+- Added a dedicated legal-risk and audit Q&A section so governance conversations do not have to start from raw metrics alone.
+
+## Quantified Outcome
+
+In a 29-minute session on 892 triage records, Maria escalated a concrete patient-safety risk in the same sitting: `age` and `insurance_status` surfaced as the dominant drivers behind unfair deprioritization of elderly uninsured patients. The session exposed two healthcare-specific gaps - insufficient urgency in the severe-risk state and too much manual work when handing findings upward - and the current report now answers with repeated risk signaling in the summary flow plus two visible PDF-share entry points for faster escalation.
+
+## Representative Quote
+
+> "The model was deprioritizing elderly uninsured patients - this could cost lives. We needed something that made the risk obvious in minutes, and this did."
+
+## Screenshot
+
+![Screenshot](../../docs/screenshots/screenshot_test3_medical_triage.png)

@@ -203,13 +203,19 @@ def _compute_tcav_concepts(
     return concepts
 
 
-def run_causal_tcav_analysis(df: pd.DataFrame) -> dict[str, Any]:
-    if OUTCOME_COLUMN not in df.columns:
-        raise ValueError("Dataset must include hired column for causal analysis.")
+def run_causal_tcav_analysis(
+    df: pd.DataFrame,
+    *,
+    outcome_column: str = OUTCOME_COLUMN,
+    protected_priority: list[str] | None = None,
+) -> dict[str, Any]:
+    if outcome_column not in df.columns:
+        raise ValueError(f"Dataset must include '{outcome_column}' column for causal analysis.")
 
-    protected = next((column for column in PROTECTED_PRIORITY if column in df.columns), "gender")
+    priority = protected_priority or PROTECTED_PRIORITY
+    protected = next((column for column in priority if column in df.columns), "gender")
     if protected not in df.columns:
-        raise ValueError("Dataset must include at least one protected attribute (gender or ethnicity).")
+        raise ValueError("Dataset must include at least one protected attribute.")
 
     normalized_df = df.copy()
     for column in normalized_df.columns:
@@ -218,18 +224,18 @@ def run_causal_tcav_analysis(df: pd.DataFrame) -> dict[str, Any]:
         else:
             normalized_df[column] = normalized_df[column].fillna(0)
 
-    normalized_df[OUTCOME_COLUMN] = normalized_df[OUTCOME_COLUMN].astype(int)
+    normalized_df[outcome_column] = normalized_df[outcome_column].astype(int)
     encoded_df, _ = _encode_dataframe(normalized_df)
 
     feature_columns = [
         column
         for column in encoded_df.columns
-        if column not in {OUTCOME_COLUMN, protected, *NON_FEATURE_COLUMNS}
+        if column not in {outcome_column, protected, *NON_FEATURE_COLUMNS}
     ]
 
     protected_array = encoded_df[protected].to_numpy()
     proxy_findings: list[dict[str, Any]] = []
-    dag_edges = [{"source": protected, "target": OUTCOME_COLUMN}]
+    dag_edges = [{"source": protected, "target": outcome_column}]
 
     for feature in feature_columns:
         feature_array = encoded_df[feature].to_numpy()
@@ -238,7 +244,7 @@ def run_causal_tcav_analysis(df: pd.DataFrame) -> dict[str, Any]:
             encoded_df,
             feature=feature,
             protected=protected,
-            outcome=OUTCOME_COLUMN,
+            outcome=outcome_column,
         )
         risk_score = proxy_strength * abs(effect)
         is_proxy = proxy_strength >= 0.25 and abs(effect) >= 0.03
@@ -251,20 +257,20 @@ def run_causal_tcav_analysis(df: pd.DataFrame) -> dict[str, Any]:
                 "is_proxy": bool(is_proxy),
                 "explanation": (
                     f"{feature} has proxy-strength {proxy_strength:.3f} with {protected} "
-                    f"and causal effect {effect:.3f} on hiring."
+                    f"and causal effect {effect:.3f} on {outcome_column}."
                 ),
             }
         )
         if is_proxy:
             dag_edges.append({"source": protected, "target": feature})
-            dag_edges.append({"source": feature, "target": OUTCOME_COLUMN})
+            dag_edges.append({"source": feature, "target": outcome_column})
 
     proxy_findings.sort(key=lambda item: item["risk_score"], reverse=True)
     tcav_concepts = _compute_tcav_concepts(
         encoded_df=encoded_df,
         raw_df=normalized_df,
         feature_columns=feature_columns,
-        outcome=OUTCOME_COLUMN,
+        outcome=outcome_column,
     )
 
     return {

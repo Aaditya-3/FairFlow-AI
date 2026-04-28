@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Scale,
   Shield,
   Upload,
   Users,
@@ -44,6 +45,11 @@ function ProtectedLayout() {
         label: "Mitigation",
         to: latestAuditId ? `/mitigate/${latestAuditId}` : "/audit",
         icon: Shield
+      },
+      {
+        label: "Governance",
+        to: latestAuditId ? `/governance/${latestAuditId}` : "/governance",
+        icon: Scale
       }
     ],
     [latestAuditId]
@@ -58,11 +64,11 @@ function ProtectedLayout() {
     <div className="flex h-full flex-col bg-navy text-white">
       <div className="border-b border-white/10 px-6 py-6">
         <div className="inline-flex items-center rounded-full bg-amber/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-amber-light">
-          Hiring Fairness
+          Fairness Governance
         </div>
         <h1 className="mt-4 text-2xl font-extrabold tracking-tight">FairFlow AI</h1>
         <p className="mt-2 text-sm text-slate-300">
-          Audit, explain, and mitigate bias across hiring decisions.
+          Audit, explain, and mitigate bias across hiring, lending, and healthcare decisions.
         </p>
       </div>
 
@@ -158,10 +164,14 @@ function ProtectedLayout() {
                 </button>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                    Bias Detection Workspace
+                    Policy & Fairness Workspace
                   </p>
                   <h2 className="text-lg font-bold text-slate-900">
-                    {location.pathname === "/dashboard" ? "Executive Dashboard" : "Fairness Operations"}
+                    {location.pathname === "/dashboard"
+                      ? "Executive Dashboard"
+                      : location.pathname.startsWith("/governance")
+                        ? "Governance Intelligence"
+                        : "Fairness Operations"}
                   </h2>
                 </div>
               </div>
@@ -179,7 +189,7 @@ function ProtectedLayout() {
 
           <footer className="border-t border-slate-200 bg-white/90 px-4 py-4 sm:px-6 lg:px-8">
             <div className="mx-auto flex max-w-7xl flex-col gap-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-              <p>FairLens AI • Glass Box Fairness Governance</p>
+              <p>FairFlow AI • Glass Box Fairness Governance</p>
               <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 font-semibold uppercase tracking-[0.14em] text-indigo-700">
                 Powered by IndiCASA
               </div>

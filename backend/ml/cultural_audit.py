@@ -45,22 +45,26 @@ def _normalize_label_token(value: Any) -> str:
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
 
 
-def _normalize_decision_column(series: pd.Series) -> pd.Series:
+def _normalize_decision_column(series: pd.Series, *, positive_value: Any = 1) -> pd.Series:
     numeric_series = pd.to_numeric(series, errors="coerce")
     if numeric_series.notna().all():
+        positive_numeric = pd.to_numeric(pd.Series([positive_value]), errors="coerce").iloc[0]
+        if pd.notna(positive_numeric):
+            return numeric_series.apply(lambda value: 1 if float(value) == float(positive_numeric) else 0).astype(int)
         if not numeric_series.isin([0, 1]).all():
             invalid_values = sorted(set(numeric_series[~numeric_series.isin([0, 1])].tolist()))[:5]
             raise ValueError(
-                "Column 'hired' must be binary. Supported values include "
+                "Decision column must be binary. Supported values include "
                 "0/1, yes/no, true/false. "
                 f"Found unsupported numeric values: {invalid_values}"
             )
         return numeric_series.astype(int)
 
     normalized_tokens = series.map(_normalize_label_token)
+    positive_token = _normalize_label_token(positive_value)
     mapped = normalized_tokens.map(
         lambda token: 1
-        if token in POSITIVE_LABEL_TOKENS
+        if token in POSITIVE_LABEL_TOKENS or token == positive_token
         else 0
         if token in NEGATIVE_LABEL_TOKENS
         else pd.NA
@@ -68,7 +72,7 @@ def _normalize_decision_column(series: pd.Series) -> pd.Series:
     if mapped.isna().any():
         invalid_tokens = sorted(set(normalized_tokens[mapped.isna()].tolist()))[:5]
         raise ValueError(
-            "Column 'hired' must be binary. Supported values include "
+            "Decision column must be binary. Supported values include "
             "0/1, yes/no, true/false, hired/rejected. "
             f"Found unsupported values: {invalid_tokens}"
         )
@@ -118,12 +122,20 @@ def _intersectional_snapshot(df: pd.DataFrame, decision_column: str) -> list[dic
     return snapshots
 
 
-def run_cultural_bias_scan(df: pd.DataFrame, decision_column: str = DECISION_COLUMN) -> dict[str, Any]:
+def run_cultural_bias_scan(
+    df: pd.DataFrame,
+    decision_column: str = DECISION_COLUMN,
+    *,
+    positive_value: Any = 1,
+) -> dict[str, Any]:
     if decision_column not in df.columns:
         raise ValueError("Cultural scan requires a decision column.")
 
     normalized = df.copy()
-    normalized[decision_column] = _normalize_decision_column(normalized[decision_column])
+    normalized[decision_column] = _normalize_decision_column(
+        normalized[decision_column],
+        positive_value=positive_value,
+    )
     for column in normalized.columns:
         if normalized[column].dtype == object:
             normalized[column] = normalized[column].fillna("Unknown").astype(str).str.strip()

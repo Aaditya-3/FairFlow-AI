@@ -113,6 +113,7 @@ class _LoginScreenState extends State<LoginScreen>
     final theme = Theme.of(context);
     final textTheme = theme.textTheme;
     final bool isDark = theme.brightness == Brightness.dark;
+    final bool googleAvailable = AuthService.instance.googleSignInAvailable;
 
     return Scaffold(
       body: DecoratedBox(
@@ -271,10 +272,23 @@ class _LoginScreenState extends State<LoginScreen>
                                   const SizedBox(height: 28),
                                   _GoogleSignInButton(
                                     loading: _loadingGoogle,
-                                    onPressed: _loadingGoogle || _loadingGuest
+                                    onPressed: !googleAvailable ||
+                                            _loadingGoogle ||
+                                            _loadingGuest
                                         ? null
                                         : _signInWithGoogle,
                                   ),
+                                  if (!googleAvailable) ...[
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      'Local demo mode is active. Add real Firebase web keys to enable Google sign-in.',
+                                      style: textTheme.bodySmall?.copyWith(
+                                        color: isDark
+                                            ? Colors.white.withOpacity(0.72)
+                                            : AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
                                   const SizedBox(height: 18),
                                   Row(
                                     children: [
@@ -372,8 +386,7 @@ class _LoginScreenState extends State<LoginScreen>
                                           CrossAxisAlignment.start,
                                       children: [
                                         const Padding(
-                                          padding:
-                                              EdgeInsets.only(top: 1.5),
+                                          padding: EdgeInsets.only(top: 1.5),
                                           child: Icon(
                                             Icons.verified_user_outlined,
                                             size: 18,
@@ -385,9 +398,9 @@ class _LoginScreenState extends State<LoginScreen>
                                         const SizedBox(width: 10),
                                         Expanded(
                                           child: Text(
-                                            'No data stored. No sign-up needed.',
-                                            style: textTheme.bodyMedium
-                                                ?.copyWith(
+                                            'Firebase guest demo. No sign-up needed.',
+                                            style:
+                                                textTheme.bodyMedium?.copyWith(
                                               color: isDark
                                                   ? Colors.white
                                                       .withOpacity(0.82)
@@ -420,8 +433,8 @@ class _LoginScreenState extends State<LoginScreen>
                                               vertical: 10,
                                             ),
                                             decoration: BoxDecoration(
-                                              color: AppColors.unBlue
-                                                  .withOpacity(
+                                              color:
+                                                  AppColors.unBlue.withOpacity(
                                                 isDark ? 0.24 : 0.12,
                                               ),
                                               borderRadius:
@@ -448,8 +461,7 @@ class _LoginScreenState extends State<LoginScreen>
                                                     color: isDark
                                                         ? Colors.white
                                                         : AppColors.unBlue,
-                                                    fontWeight:
-                                                        FontWeight.w700,
+                                                    fontWeight: FontWeight.w700,
                                                   ),
                                                 ),
                                               ],

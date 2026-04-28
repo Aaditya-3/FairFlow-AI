@@ -35,7 +35,11 @@ def generate_synthetic_counterfactual_patch(
     target_attribute: str = "gender",
     decision_column: str = "hired",
     max_rows: int = 500,
+    outcome_positive_value: Any = 1,
 ) -> dict[str, Any]:
+    fallback_protected = next((column for column in ("gender", "ethnicity", "race", "age") if column in df.columns), None)
+    protected_for_metrics = target_attribute if target_attribute in df.columns else (fallback_protected or target_attribute)
+
     if target_attribute not in df.columns:
         return {
             "engine": "vertex-style-fallback",
@@ -43,8 +47,22 @@ def generate_synthetic_counterfactual_patch(
             "reason": f"Column '{target_attribute}' not present in dataset.",
             "generated_rows": 0,
             "target_attribute": target_attribute,
-            "metrics_before": metric_payload(run_bias_detection(df)),
-            "metrics_after": metric_payload(run_bias_detection(df)),
+            "metrics_before": metric_payload(
+                run_bias_detection(
+                    df,
+                    label_column=decision_column,
+                    protected_attributes=[protected_for_metrics],
+                    outcome_positive_value=outcome_positive_value,
+                )
+            ),
+            "metrics_after": metric_payload(
+                run_bias_detection(
+                    df,
+                    label_column=decision_column,
+                    protected_attributes=[protected_for_metrics],
+                    outcome_positive_value=outcome_positive_value,
+                )
+            ),
             "preview": [],
         }
 
@@ -56,7 +74,12 @@ def generate_synthetic_counterfactual_patch(
         else:
             normalized[column] = normalized[column].fillna(0)
 
-    base_detection = run_bias_detection(normalized)
+    base_detection = run_bias_detection(
+        normalized,
+        label_column=decision_column,
+        protected_attributes=[protected_for_metrics],
+        outcome_positive_value=outcome_positive_value,
+    )
     base_metrics = metric_payload(base_detection)
 
     rates = _positive_rate_by_group(normalized, target_attribute, decision_column)
@@ -135,7 +158,12 @@ def generate_synthetic_counterfactual_patch(
         }
 
     patched_df = pd.concat([normalized, pd.DataFrame(synthetic_rows)], ignore_index=True)
-    patched_detection = run_bias_detection(patched_df)
+    patched_detection = run_bias_detection(
+        patched_df,
+        label_column=decision_column,
+        protected_attributes=[protected_for_metrics],
+        outcome_positive_value=outcome_positive_value,
+    )
     patched_metrics = metric_payload(patched_detection)
 
     return {

@@ -46,20 +46,33 @@ def _safe_rate(values: np.ndarray) -> float:
     return float(np.mean(values))
 
 
+def _group_codes(values: np.ndarray) -> tuple[int, int] | None:
+    unique_values = sorted({int(value) for value in values.tolist()})
+    if len(unique_values) < 2:
+        return None
+    return unique_values[0], unique_values[-1]
+
+
 def _enforce_disparate_impact_floor(
     X: pd.DataFrame,
     predictions: np.ndarray,
     rank_scores: np.ndarray,
     *,
+    protected_attribute: str,
     target_di: float = 0.95,
 ) -> np.ndarray:
     calibrated = predictions.astype(int).copy()
-    if "gender" not in X.columns:
+    if protected_attribute not in X.columns:
         return calibrated
 
-    protected = X["gender"].to_numpy()
-    privileged_mask = protected == 1
-    unprivileged_mask = protected == 0
+    protected = X[protected_attribute].to_numpy()
+    groups = _group_codes(protected)
+    if groups is None:
+        return calibrated
+    unprivileged_group, privileged_group = groups
+
+    privileged_mask = protected == privileged_group
+    unprivileged_mask = protected == unprivileged_group
     if not np.any(privileged_mask) or not np.any(unprivileged_mask):
         return calibrated
 
@@ -90,14 +103,43 @@ def _enforce_disparate_impact_floor(
     return calibrated
 
 
-def apply_mitigations(df, original_metrics) -> dict:
-    normalized_df = normalize_dataframe(pd.DataFrame(df))
-    encoded_df, _ = encode_categorical_columns(normalized_df)
+def apply_mitigations(
+    df,
+    original_metrics,
+    *,
+    label_column: str = LABEL_COLUMN,
+    protected_attribute: str = "gender",
+    feature_columns: list[str] | None = None,
+    outcome_positive_value: Any = 1,
+) -> dict:
+    normalized_df = normalize_dataframe(
+        pd.DataFrame(df),
+        label_column=label_column,
+        protected_attribute=protected_attribute,
+        outcome_positive_value=outcome_positive_value,
+    )
+    encoded_df, _ = encode_categorical_columns(
+        normalized_df,
+        label_column=label_column,
+        protected_attribute=protected_attribute,
+    )
 
-    X = encoded_df.drop(columns=[LABEL_COLUMN, *NON_FEATURE_COLUMNS], errors="ignore")
-    y = encoded_df[LABEL_COLUMN].astype(int).to_numpy()
+    X = encoded_df.drop(columns=[label_column, *NON_FEATURE_COLUMNS], errors="ignore")
+    if feature_columns:
+        selected = [column for column in feature_columns if column in X.columns]
+        if selected:
+            X = X[selected]
+    if protected_attribute in encoded_df.columns and protected_attribute not in X.columns:
+        X = pd.concat([X, encoded_df[[protected_attribute]]], axis=1)
+    y = encoded_df[label_column].astype(int).to_numpy()
 
-    original_detection = run_bias_detection(normalized_df)
+    original_detection = run_bias_detection(
+        normalized_df,
+        label_column=label_column,
+        protected_attributes=[protected_attribute],
+        outcome_positive_value=outcome_positive_value,
+        feature_columns=X.columns.tolist(),
+    )
     original_predictions = original_detection["predictions"].tolist()
     results = {
         "original": _default_stage(original_metrics, original_predictions),
@@ -111,18 +153,46 @@ def apply_mitigations(df, original_metrics) -> dict:
         results["final_predictions"] = original_predictions
         return results
 
-    dataset = build_binary_label_dataset(encoded_df)
+    dataset = build_binary_label_dataset(
+        encoded_df,
+        label_column=label_column,
+        protected_attribute=protected_attribute,
+    )
+
+    if protected_attribute not in X.columns:
+        fallback_stage = _default_stage(original_metrics, original_predictions)
+        results["after_reweighing"] = fallback_stage
+        results["after_prejudice_remover"] = fallback_stage
+        results["after_equalized_odds"] = fallback_stage
+        results["final_predictions"] = original_predictions
+        return results
+
+    protected_values = X[protected_attribute].to_numpy()
+    groups = _group_codes(protected_values)
+    if groups is None:
+        fallback_stage = _default_stage(original_metrics, original_predictions)
+        results["after_reweighing"] = fallback_stage
+        results["after_prejudice_remover"] = fallback_stage
+        results["after_equalized_odds"] = fallback_stage
+        results["final_predictions"] = original_predictions
+        return results
+    unprivileged_group, privileged_group = groups
 
     try:
         reweighing = Reweighing(
-            unprivileged_groups=[{"gender": 0}],
-            privileged_groups=[{"gender": 1}],
+            unprivileged_groups=[{protected_attribute: unprivileged_group}],
+            privileged_groups=[{protected_attribute: privileged_group}],
         )
         reweighed_dataset = reweighing.fit_transform(dataset)
         reweighing_model = _train_model(X, y, sample_weight=reweighed_dataset.instance_weights)
         reweighing_predictions = reweighing_model.predict(X)
         results["after_reweighing"] = _default_stage(
-            compute_fairness_metrics(X, y, reweighing_predictions),
+            compute_fairness_metrics(
+                X,
+                y,
+                reweighing_predictions,
+                protected_attribute=protected_attribute,
+            ),
             reweighing_predictions.tolist(),
         )
     except Exception:
@@ -130,15 +200,20 @@ def apply_mitigations(df, original_metrics) -> dict:
 
     try:
         prejudice_remover = PrejudiceRemover(
-            sensitive_attr="gender",
-            class_attr=LABEL_COLUMN,
+            sensitive_attr=protected_attribute,
+            class_attr=label_column,
             eta=25.0,
         )
         prejudice_remover.fit(dataset)
         prejudice_predictions_dataset = prejudice_remover.predict(dataset)
         prejudice_predictions = prejudice_predictions_dataset.labels.ravel().astype(int)
         results["after_prejudice_remover"] = _default_stage(
-            compute_fairness_metrics(X, y, prejudice_predictions),
+            compute_fairness_metrics(
+                X,
+                y,
+                prejudice_predictions,
+                protected_attribute=protected_attribute,
+            ),
             prejudice_predictions.tolist(),
         )
     except Exception:
@@ -152,22 +227,33 @@ def apply_mitigations(df, original_metrics) -> dict:
         baseline_prediction_dataset.labels = baseline_predictions.reshape(-1, 1)
 
         equalized_odds = EqOddsPostprocessing(
-            unprivileged_groups=[{"gender": 0}],
-            privileged_groups=[{"gender": 1}],
+            unprivileged_groups=[{protected_attribute: unprivileged_group}],
+            privileged_groups=[{protected_attribute: privileged_group}],
             seed=42,
         )
         equalized_odds.fit(dataset, baseline_prediction_dataset)
         equalized_predictions_dataset = equalized_odds.predict(baseline_prediction_dataset)
         equalized_predictions = equalized_predictions_dataset.labels.ravel().astype(int)
-        equalized_metrics = compute_fairness_metrics(X, y, equalized_predictions)
+        equalized_metrics = compute_fairness_metrics(
+            X,
+            y,
+            equalized_predictions,
+            protected_attribute=protected_attribute,
+        )
         if float(equalized_metrics.get("disparate_impact", 0.0)) < 0.8:
             equalized_predictions = _enforce_disparate_impact_floor(
                 X,
                 equalized_predictions,
                 baseline_scores,
+                protected_attribute=protected_attribute,
                 target_di=0.95,
             )
-            equalized_metrics = compute_fairness_metrics(X, y, equalized_predictions)
+            equalized_metrics = compute_fairness_metrics(
+                X,
+                y,
+                equalized_predictions,
+                protected_attribute=protected_attribute,
+            )
 
         results["after_equalized_odds"] = _default_stage(equalized_metrics, equalized_predictions.tolist())
         results["final_predictions"] = equalized_predictions.tolist()

@@ -18,6 +18,32 @@ import { LAST_AUDIT_STORAGE_KEY, listAudits } from "../api/fairlensApi";
 
 const ethnicityColors = ["#2563eb", "#ec4899", "#16a34a", "#f97316"];
 
+const domainBadgeStyles = {
+  hiring: "bg-blue-100 text-blue-700",
+  lending: "bg-amber-100 text-amber-800",
+  healthcare: "bg-teal-100 text-teal-700",
+  custom: "bg-slate-200 text-slate-700"
+};
+
+function extractErrorMessage(error, fallback) {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+  if (detail && typeof detail === "object" && typeof detail.message === "string") {
+    return detail.message;
+  }
+  return fallback;
+}
+
+function domainLabel(audit) {
+  return audit?.domain_config?.display_name || "Hiring";
+}
+
+function domainKey(audit) {
+  return (audit?.domain_config?.domain || "hiring").toLowerCase();
+}
+
 function StatCard({ label, value, icon: Icon, trend, accent }) {
   return (
     <div className="section-card">
@@ -58,23 +84,26 @@ function LoadingSkeleton() {
 function Dashboard() {
   const [audits, setAudits] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  const fetchAudits = async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const data = await listAudits({ silent: true });
+      setAudits(data);
+      if (data[0]?.id) {
+        localStorage.setItem(LAST_AUDIT_STORAGE_KEY, data[0].id);
+      }
+    } catch (error) {
+      setAudits([]);
+      setLoadError(extractErrorMessage(error, "Backend is unavailable. Start API server on port 8000 and retry."));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchAudits = async () => {
-      setLoading(true);
-      try {
-        const data = await listAudits();
-        setAudits(data);
-        if (data[0]?.id) {
-          localStorage.setItem(LAST_AUDIT_STORAGE_KEY, data[0].id);
-        }
-      } catch (error) {
-        setAudits([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchAudits();
   }, []);
 
@@ -170,33 +199,68 @@ function Dashboard() {
 
   if (!audits.length) {
     return (
-      <div className="section-card flex min-h-[420px] flex-col items-center justify-center text-center">
-        <div className="rounded-full bg-amber/10 p-4 text-amber-dark">
-          <FolderSearch className="h-8 w-8" />
+      <div className="space-y-4">
+        {loadError && (
+          <div className="section-card border border-rose-200 bg-rose-50/70">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.14em] text-rose-700">Connection issue</p>
+                <p className="mt-2 text-sm leading-7 text-rose-900">{loadError}</p>
+              </div>
+              <button
+                type="button"
+                onClick={fetchAudits}
+                className="inline-flex w-fit items-center rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
+              >
+                Retry loading audits
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="section-card flex min-h-[420px] flex-col items-center justify-center text-center">
+          <div className="rounded-full bg-amber/10 p-4 text-amber-dark">
+            <FolderSearch className="h-8 w-8" />
+          </div>
+          <h2 className="mt-6 text-3xl font-bold text-slate-900">No audits yet</h2>
+          <p className="mt-3 max-w-xl text-sm leading-7 text-slate-500">
+            Upload your first dataset to generate fairness metrics, decision explanations,
+            and mitigation recommendations.
+          </p>
+          <Link
+            to="/audit"
+            className="mt-8 inline-flex items-center rounded-2xl bg-navy px-5 py-3 text-sm font-semibold text-white transition hover:bg-navy-light"
+          >
+            Start Your First Audit
+          </Link>
         </div>
-        <h2 className="mt-6 text-3xl font-bold text-slate-900">No audits yet</h2>
-        <p className="mt-3 max-w-xl text-sm leading-7 text-slate-500">
-          Upload your first hiring dataset to generate fairness metrics, candidate explanations,
-          and mitigation recommendations.
-        </p>
-        <Link
-          to="/audit"
-          className="mt-8 inline-flex items-center rounded-2xl bg-navy px-5 py-3 text-sm font-semibold text-white transition hover:bg-navy-light"
-        >
-          Start Your First Audit
-        </Link>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      {loadError && (
+        <div className="section-card border border-amber-200 bg-amber-50/70">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <p className="text-sm text-amber-900">
+              Some data could not refresh from backend. Showing last available results.
+            </p>
+            <button
+              type="button"
+              onClick={fetchAudits}
+              className="inline-flex w-fit items-center rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100"
+            >
+              Retry refresh
+            </button>
+          </div>
+        </div>
+      )}
       <div className="section-card overflow-hidden bg-[linear-gradient(135deg,#0f172a_0%,#1e293b_55%,#334155_100%)] text-white">
         <div className="grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_minmax(420px,0.85fr)]">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-amber-light">Operations Pulse</p>
             <h1 className="mt-4 text-4xl font-extrabold leading-tight">
-              Fairness oversight for hiring systems, in one decision cockpit.
+              Fairness oversight across hiring, lending, and healthcare in one decision cockpit.
             </h1>
             <p className="mt-5 max-w-2xl text-sm leading-7 text-slate-300">
               Track risk, investigate candidate-level bias signals, and compare mitigation outcomes
@@ -355,7 +419,18 @@ function Dashboard() {
               <tbody>
                 {audits.slice(0, 5).map((audit) => (
                   <tr key={audit.id} className="border-b border-slate-100">
-                    <td className="px-3 py-4 font-medium text-slate-900">{audit.dataset_name}</td>
+                    <td className="px-3 py-4 font-medium text-slate-900">
+                      <div className="flex flex-col gap-2">
+                        <span>{audit.dataset_name}</span>
+                        <span
+                          className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${
+                            domainBadgeStyles[domainKey(audit)] || domainBadgeStyles.custom
+                          }`}
+                        >
+                          {domainLabel(audit)}
+                        </span>
+                      </div>
+                    </td>
                     <td className="px-3 py-4 text-slate-600">
                       {new Date(audit.created_at).toLocaleDateString()}
                     </td>

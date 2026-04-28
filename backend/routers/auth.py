@@ -3,6 +3,7 @@ from hashlib import sha256
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
+from uuid import UUID
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -116,9 +117,13 @@ def get_current_user(
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
+        user_id_raw = payload.get("sub")
+        if not user_id_raw:
             raise credentials_exception
+        try:
+            user_id = UUID(str(user_id_raw))
+        except ValueError as exc:
+            raise credentials_exception from exc
     except JWTError as exc:
         raise credentials_exception from exc
 

@@ -69,6 +69,8 @@ class AuditResponse(BaseModel):
     flagged_candidates: int = 0
     gender_hire_rates: dict[str, float] = Field(default_factory=dict)
     ethnicity_hire_rates: dict[str, float] = Field(default_factory=dict)
+    protected_outcome_rates: dict[str, dict[str, float]] = Field(default_factory=dict)
+    domain_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class BiasReport(BaseModel):

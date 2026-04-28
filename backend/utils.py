@@ -3,6 +3,7 @@ from typing import Any
 
 import numpy as np
 
+from domain_config import PRESET_DOMAIN_TEMPLATES
 from models import Audit, Candidate
 
 
@@ -90,13 +91,17 @@ def serialize_candidate(candidate: Candidate) -> dict[str, Any]:
         "counterfactual_result": to_serializable(candidate.counterfactual_result),
         "skills": candidate.skills,
         "previous_companies": candidate.previous_companies,
+        "feature_payload": to_serializable(candidate.feature_payload),
     }
 
 
 def compute_group_hire_rates(candidates: list[Candidate], attribute: str) -> dict[str, float]:
     counts: dict[str, dict[str, int]] = defaultdict(lambda: {"hired": 0, "total": 0})
     for candidate in candidates:
-        key = str(getattr(candidate, attribute))
+        if hasattr(candidate, attribute):
+            key = str(getattr(candidate, attribute))
+        else:
+            key = str((candidate.feature_payload or {}).get(attribute, "Unknown"))
         counts[key]["total"] += 1
         counts[key]["hired"] += int(candidate.original_decision)
     return {
@@ -115,6 +120,15 @@ def serialize_audit(audit: Audit) -> dict[str, Any]:
         }
     )
     candidates = audit.candidates or []
+    default_domain = PRESET_DOMAIN_TEMPLATES["hiring"].model_dump(mode="json")
+    domain_config = to_serializable(audit.domain_config) or default_domain
+    protected_attributes = domain_config.get("protected_attributes", ["gender", "ethnicity"])
+    protected_outcome_rates = {
+        attribute: compute_group_hire_rates(candidates, attribute)
+        for attribute in protected_attributes
+    }
+    gender_hire_rates = protected_outcome_rates.get("gender") or compute_group_hire_rates(candidates, "gender")
+    ethnicity_hire_rates = protected_outcome_rates.get("ethnicity") or compute_group_hire_rates(candidates, "ethnicity")
     return {
         "id": audit.id,
         "user_id": audit.user_id,
@@ -129,8 +143,10 @@ def serialize_audit(audit: Audit) -> dict[str, Any]:
         "mitigation_applied": audit.mitigation_applied,
         "fairness_score": calculate_fairness_score(metrics),
         "flagged_candidates": sum(1 for candidate in candidates if candidate.bias_flagged),
-        "gender_hire_rates": compute_group_hire_rates(candidates, "gender"),
-        "ethnicity_hire_rates": compute_group_hire_rates(candidates, "ethnicity"),
+        "gender_hire_rates": gender_hire_rates,
+        "ethnicity_hire_rates": ethnicity_hire_rates,
+        "protected_outcome_rates": protected_outcome_rates,
+        "domain_config": domain_config,
     }
 
 

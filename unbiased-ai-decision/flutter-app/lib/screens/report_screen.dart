@@ -7,6 +7,7 @@ import 'package:printing/printing.dart';
 
 import '../theme/app_theme.dart';
 import '../widgets/bias_gauge.dart';
+import '../widgets/causal_graph.dart';
 import '../widgets/gemini_card.dart';
 import '../widgets/sdg_badge.dart';
 import '../widgets/shap_chart.dart';
@@ -34,6 +35,12 @@ class _ReportScreenState extends State<ReportScreen> {
     if (value is DateTime) {
       return DateFormat.yMMMd().add_jm().format(value);
     }
+    if (value is String) {
+      final parsed = DateTime.tryParse(value);
+      if (parsed != null) {
+        return DateFormat.yMMMd().add_jm().format(parsed.toLocal());
+      }
+    }
     return value?.toString() ?? 'Unknown date';
   }
 
@@ -49,7 +56,11 @@ class _ReportScreenState extends State<ReportScreen> {
   }
 
   List<Map<String, dynamic>> _shapValues() {
-    final raw = widget.initialAudit['shap_values'];
+    return _listMaps('shap_values');
+  }
+
+  List<Map<String, dynamic>> _listMaps(String key) {
+    final raw = widget.initialAudit[key];
     if (raw is List) {
       return raw
           .whereType<Map>()
@@ -57,6 +68,14 @@ class _ReportScreenState extends State<ReportScreen> {
           .toList();
     }
     return <Map<String, dynamic>>[];
+  }
+
+  Map<String, dynamic> _mapValue(String key) {
+    final raw = widget.initialAudit[key];
+    if (raw is Map) {
+      return raw.cast<String, dynamic>();
+    }
+    return <String, dynamic>{};
   }
 
   double _biasScore() =>
@@ -76,8 +95,8 @@ class _ReportScreenState extends State<ReportScreen> {
 
   Future<void> _sharePdf() async {
     final pdf = pw.Document();
-    final modelName =
-        widget.initialAudit['model_name']?.toString() ?? 'Unbiased AI Decision Report';
+    final modelName = widget.initialAudit['model_name']?.toString() ??
+        'Unbiased AI Decision Report';
 
     pdf.addPage(
       pw.MultiPage(
@@ -99,10 +118,16 @@ class _ReportScreenState extends State<ReportScreen> {
             'Dataset: ${widget.initialAudit['dataset_name'] ?? 'Unknown'}',
           ),
           pw.Text(
+            'Domain: ${widget.initialAudit['domain'] ?? 'general'}',
+          ),
+          pw.Text(
+            'Analysis backend: ${widget.initialAudit['analysis_backend'] ?? 'local'}',
+          ),
+          pw.Text(
             'Created: ${_formatDate(widget.initialAudit['created_at'])}',
           ),
           pw.Text(
-            'SDG tag: ${widget.initialAudit['sdg_tag'] ?? 'SDG 10.3'}',
+            'SDG targets: 10.3, 8.5, 16.b',
           ),
           pw.SizedBox(height: 18),
           pw.Text(
@@ -114,6 +139,12 @@ class _ReportScreenState extends State<ReportScreen> {
           ),
           pw.SizedBox(height: 8),
           pw.Text(widget.initialAudit['gemini_explanation']?.toString() ?? ''),
+          if ((widget.initialAudit['gemini_legal_risk'] ?? '')
+              .toString()
+              .isNotEmpty) ...[
+            pw.SizedBox(height: 12),
+            pw.Text(widget.initialAudit['gemini_legal_risk'].toString()),
+          ],
           pw.SizedBox(height: 18),
           pw.Text(
             'Fairness Metrics',
@@ -159,6 +190,11 @@ class _ReportScreenState extends State<ReportScreen> {
     final theme = Theme.of(context);
     final textTheme = theme.textTheme;
     final shapValues = _shapValues();
+    final recommendations = _listMaps('gemini_recommendations');
+    final auditQa = _listMaps('gemini_audit_qa');
+    final candidateFlags = _listMaps('candidate_flags');
+    final sdgMapping = _listMaps('sdg_mapping');
+    final causalGraph = _mapValue('causal_graph_json');
     final score = _biasScore();
     final severityColor = _severityColor(score);
     final severityLabel = _severityLabel(score);
@@ -224,16 +260,17 @@ class _ReportScreenState extends State<ReportScreen> {
         children: [
           _SummaryHeaderCard(
             heroTag: 'audit-card-$auditId',
-            modelName:
-                widget.initialAudit['model_name']?.toString() ?? 'Untitled model',
-            datasetName:
-                widget.initialAudit['dataset_name']?.toString() ?? 'Unknown dataset',
+            modelName: widget.initialAudit['model_name']?.toString() ??
+                'Untitled model',
+            datasetName: widget.initialAudit['dataset_name']?.toString() ??
+                'Unknown dataset',
             createdAt: _formatDate(widget.initialAudit['created_at']),
             score: score,
             severityColor: severityColor,
             severityLabel: severityLabel,
             expanded: _summaryExpanded,
-            onToggle: () => setState(() => _summaryExpanded = !_summaryExpanded),
+            onToggle: () =>
+                setState(() => _summaryExpanded = !_summaryExpanded),
           ),
           const SizedBox(height: 20),
           _SectionCard(
@@ -267,14 +304,79 @@ class _ReportScreenState extends State<ReportScreen> {
                 ),
                 const SizedBox(height: 12),
                 GeminiCard(
-                  explanation: widget.initialAudit['gemini_explanation']
-                          ?.toString() ??
-                      'No Gemini explanation is available for this audit.',
+                  explanation:
+                      widget.initialAudit['gemini_explanation']?.toString() ??
+                          'No Gemini explanation is available for this audit.',
                 ),
               ],
             ),
           ),
           const SizedBox(height: 20),
+          if (recommendations.isNotEmpty)
+            _SectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Remediation Actions',
+                    style: textTheme.headlineMedium,
+                  ),
+                  const SizedBox(height: 12),
+                  for (final item in recommendations)
+                    _RecommendationTile(item: item),
+                ],
+              ),
+            ),
+          if (recommendations.isNotEmpty) const SizedBox(height: 20),
+          if ((widget.initialAudit['gemini_legal_risk'] ?? '')
+                  .toString()
+                  .isNotEmpty ||
+              auditQa.isNotEmpty)
+            _SectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Legal Risk and Audit Q&A',
+                    style: textTheme.headlineMedium,
+                  ),
+                  if ((widget.initialAudit['gemini_legal_risk'] ?? '')
+                      .toString()
+                      .isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      widget.initialAudit['gemini_legal_risk'].toString(),
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  for (final item in auditQa) _QuestionAnswerTile(item: item),
+                ],
+              ),
+            ),
+          if ((widget.initialAudit['gemini_legal_risk'] ?? '')
+                  .toString()
+                  .isNotEmpty ||
+              auditQa.isNotEmpty)
+            const SizedBox(height: 20),
+          if (candidateFlags.isNotEmpty)
+            _SectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Flagged Decisions',
+                    style: textTheme.headlineMedium,
+                  ),
+                  const SizedBox(height: 12),
+                  for (final item in candidateFlags)
+                    _CandidateFlagTile(item: item),
+                ],
+              ),
+            ),
+          if (candidateFlags.isNotEmpty) const SizedBox(height: 20),
           _SectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -296,7 +398,29 @@ class _ReportScreenState extends State<ReportScreen> {
             ),
           ),
           const SizedBox(height: 20),
-          const SdgBadge(),
+          _SectionCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Causal Pathway',
+                  style: textTheme.headlineMedium,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.initialAudit['causal_pathway']?.toString() ??
+                      'No strong pathway detected.',
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                CausalGraph(graph: causalGraph),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          SdgBadge(mapping: sdgMapping),
           const SizedBox(height: 20),
           _SectionCard(
             child: Column(
@@ -325,14 +449,14 @@ class _ReportScreenState extends State<ReportScreen> {
                     _MetricCard(
                       name: 'Demographic Parity',
                       value: _metric(widget.initialAudit, 'demographic_parity'),
-                      status:
-                          _parityStatus(_metric(widget.initialAudit, 'demographic_parity')),
+                      status: _parityStatus(
+                          _metric(widget.initialAudit, 'demographic_parity')),
                     ),
                     _MetricCard(
                       name: 'Equalized Odds',
                       value: _metric(widget.initialAudit, 'equalized_odds'),
-                      status:
-                          _parityStatus(_metric(widget.initialAudit, 'equalized_odds')),
+                      status: _parityStatus(
+                          _metric(widget.initialAudit, 'equalized_odds')),
                     ),
                     _MetricCard(
                       name: 'Individual Fairness',
@@ -564,7 +688,7 @@ class _SummaryHeaderCard extends StatelessWidget {
                         ),
                         const _SummaryChip(
                           icon: Icons.public_rounded,
-                          label: 'Aligned to SDG 10.3',
+                          label: 'Mapped to SDG 10.3, 8.5, 16.b',
                         ),
                       ],
                     ),
@@ -572,6 +696,163 @@ class _SummaryHeaderCard extends StatelessWidget {
                 : const SizedBox.shrink(),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _RecommendationTile extends StatelessWidget {
+  const _RecommendationTile({
+    required this.item,
+  });
+
+  final Map<String, dynamic> item;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final priority = item['priority']?.toString() ?? 'review';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.unBlue.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.unBlue.withOpacity(0.18)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(
+              Icons.rule_rounded,
+              color: AppColors.unBlue,
+              semanticLabel: 'Recommendation',
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item['title']?.toString() ?? 'Recommended action',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    item['action']?.toString() ?? '',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Priority: $priority',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: AppColors.unBlue,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _QuestionAnswerTile extends StatelessWidget {
+  const _QuestionAnswerTile({
+    required this.item,
+  });
+
+  final Map<String, dynamic> item;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            item['question']?.toString() ?? 'Audit question',
+            style: theme.textTheme.titleMedium,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            item['answer']?.toString() ?? '',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CandidateFlagTile extends StatelessWidget {
+  const _CandidateFlagTile({
+    required this.item,
+  });
+
+  final Map<String, dynamic> item;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final drivers = item['primary_drivers'];
+    final driverText =
+        drivers is List ? drivers.join(', ') : drivers?.toString() ?? '';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.danger.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.person_search_rounded,
+              color: AppColors.danger,
+              semanticLabel: 'Flagged decision',
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item['row_id']?.toString() ?? 'Flagged row',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Group: ${item['protected_group'] ?? 'Unknown'}',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  if (driverText.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Drivers: $driverText',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -603,7 +884,8 @@ class _SummaryChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: AppColors.accentAmber, semanticLabel: label),
+          Icon(icon,
+              size: 16, color: AppColors.accentAmber, semanticLabel: label),
           const SizedBox(width: 8),
           Text(
             label,
