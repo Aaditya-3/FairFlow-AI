@@ -13,6 +13,17 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ReferenceArea,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from "recharts";
 import { useParams } from "react-router-dom";
 
 import {
@@ -40,6 +51,30 @@ const metricThresholds = {
   equal_opp_diff: "|x| < 0.10",
   avg_odds_diff: "|x| < 0.10"
 };
+
+const strategyStageConfig = [
+  { key: "original", label: "Before", fill: "#334155" },
+  { key: "after_reweighing", label: "Reweighing", fill: "#60a5fa" },
+  { key: "after_prejudice_remover", label: "Prejudice Remover", fill: "#a78bfa" },
+  { key: "after_equalized_odds", label: "Equalized Odds", fill: "#10b981" }
+];
+
+const safeBands = {
+  disparate_impact: { min: 0.8, max: 1.2 },
+  stat_parity_diff: { min: -0.1, max: 0.1 },
+  equal_opp_diff: { min: -0.1, max: 0.1 },
+  avg_odds_diff: { min: -0.1, max: 0.1 }
+};
+
+function scoreMetricSnapshot(snapshot = {}) {
+  const di = Number(snapshot.disparate_impact ?? 0);
+  const spd = Math.abs(Number(snapshot.stat_parity_diff ?? 0));
+  const eod = Math.abs(Number(snapshot.equal_opp_diff ?? 0));
+  const aod = Math.abs(Number(snapshot.avg_odds_diff ?? 0));
+  const diScore = Math.max(0, 1 - Math.abs(1 - di));
+  const gapScore = (value) => Math.max(0, 1 - value / 0.5);
+  return diScore + gapScore(spd) + gapScore(eod) + gapScore(aod);
+}
 
 function buildMitigationSummary(result) {
   if (!result) {
@@ -124,6 +159,10 @@ function Mitigate() {
   const [runningSynthetic, setRunningSynthetic] = useState(false);
   const [deepInspection, setDeepInspection] = useState(null);
   const [loadingDeepInspection, setLoadingDeepInspection] = useState(false);
+  const domainConfig = audit?.domain_config || {};
+  const subjectLabel = domainConfig.subject_label || "Candidate";
+  const outcomeLabel = domainConfig.outcome_label || "Hired";
+  const protectedPrimary = (domainConfig.protected_attributes || ["gender"])[0] || "gender";
 
   useEffect(() => {
     if (auditId) {
@@ -196,7 +235,7 @@ function Mitigate() {
   const handleRunSyntheticPatch = async () => {
     setRunningSynthetic(true);
     try {
-      const response = await runSyntheticPatch(auditId, "gender");
+      const response = await runSyntheticPatch(auditId, protectedPrimary);
       setSyntheticResult(response);
       toast.success(
         response.enabled
@@ -258,6 +297,48 @@ function Mitigate() {
     return "Mitigation kept the fairness score level";
   }, [fairnessLiftPoints, result]);
 
+  const strategyCharts = useMemo(() => {
+    if (!result) {
+      return [];
+    }
+    return Object.entries(metricLabels).map(([metricKey, label]) => ({
+      key: metricKey,
+      label,
+      safe: safeBands[metricKey],
+      data: strategyStageConfig.map((stage) => ({
+        stage: stage.label,
+        value: Number(result[stage.key]?.[metricKey] ?? 0),
+        fill: stage.fill
+      }))
+    }));
+  }, [result]);
+
+  const recommendedStrategy = useMemo(() => {
+    if (!result) {
+      return null;
+    }
+    const recommendationText = (agentDecision?.recommendation || "").toLowerCase();
+    if (recommendationText.includes("equalized odds")) {
+      return "Equalized Odds";
+    }
+    if (recommendationText.includes("reweigh")) {
+      return "Reweighing";
+    }
+    if (recommendationText.includes("prejudice")) {
+      return "Prejudice Remover";
+    }
+
+    const scored = strategyStageConfig
+      .filter((stage) => stage.key !== "original")
+      .map((stage) => ({
+        label: stage.label,
+        score: scoreMetricSnapshot(result[stage.key])
+      }))
+      .sort((left, right) => right.score - left.score);
+
+    return scored[0]?.label || "Equalized Odds";
+  }, [agentDecision, result]);
+
   if (loadingAudit) {
     return (
       <div className="section-card flex min-h-[320px] items-center justify-center">
@@ -288,7 +369,7 @@ function Mitigate() {
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">
               Run reweighing, prejudice remover, and equalized odds post-processing against{" "}
               <span className="font-semibold text-white">{audit.dataset_name}</span> to understand
-              how fairness metrics shift before rankings are refreshed.
+              how {outcomeLabel.toLowerCase()} fairness metrics shift before rankings are refreshed.
             </p>
           </div>
           <button
@@ -308,7 +389,7 @@ function Mitigate() {
           <h2 className="text-2xl font-bold text-slate-900">Mitigation analysis has not been run yet</h2>
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-slate-500">
             Start the mitigation workflow to compute before-and-after fairness metrics, update
-            candidate ranking decisions, and enable PDF report export.
+            {subjectLabel.toLowerCase()} ranking decisions, and enable PDF report export.
           </p>
         </div>
       )}
@@ -410,6 +491,56 @@ function Mitigate() {
 
           <MetricComparisonTable data={result} />
 
+          <div className="section-card border border-slate-200 bg-white">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-dark">
+                  Strategy Comparison
+                </p>
+                <h3 className="mt-2 text-2xl font-bold text-slate-900">
+                  Before vs after mitigation ({outcomeLabel} fairness)
+                </h3>
+              </div>
+              {recommendedStrategy && (
+                <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-indigo-700">
+                  Recommended strategy: {recommendedStrategy}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 grid gap-5 xl:grid-cols-2">
+              {strategyCharts.map((chart) => (
+                <div key={chart.key} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-semibold text-slate-900">{chart.label}</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {outcomeLabel} disparity by {protectedPrimary} • safe zone: {chart.safe.min} to {chart.safe.max}
+                  </p>
+                  <div className="mt-3 h-[220px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chart.data} barSize={34}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="stage" tick={{ fill: "#475569", fontSize: 12 }} />
+                        <YAxis tick={{ fill: "#475569", fontSize: 12 }} />
+                        <Tooltip formatter={(value) => Number(value).toFixed(4)} />
+                        <ReferenceArea
+                          y1={chart.safe.min}
+                          y2={chart.safe.max}
+                          fill="#d1fae5"
+                          fillOpacity={0.5}
+                        />
+                        <Bar dataKey="value" radius={[8, 8, 0, 0]}>
+                          {chart.data.map((entry) => (
+                            <Cell key={`${chart.key}-${entry.stage}`} fill={entry.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {Object.entries(metricLabels).map(([key, label]) => (
               <MetricProgress
@@ -503,7 +634,7 @@ function Mitigate() {
                 <h3 className="mt-2 text-2xl font-bold text-slate-900">{summaryHeadline}</h3>
                 <p className="mt-3 text-sm leading-7 text-slate-600">
                   {result.mitigated_candidates > 0
-                    ? `Model recommendations updated for ${result.mitigated_candidates} records.`
+                    ? `Model recommendations updated for ${result.mitigated_candidates} ${subjectLabel.toLowerCase()} records.`
                     : "No recommendation flips were required for this run."}{" "}
                   You can now export a stakeholder-ready PDF or confirm the recalculated rankings.
                 </p>

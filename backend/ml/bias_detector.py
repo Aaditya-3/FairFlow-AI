@@ -46,6 +46,8 @@ POSITIVE_LABEL_TOKENS = {
     "yes",
     "y",
     "hired",
+    "approved",
+    "admitted",
     "selected",
     "accept",
     "accepted",
@@ -61,6 +63,7 @@ NEGATIVE_LABEL_TOKENS = {
     "not_hired",
     "not_selected",
     "declined",
+    "denied",
 }
 
 MALE_GENDER_TOKENS = {"m", "male", "man", "cis_male", "cisgender_male", "boy"}
@@ -99,21 +102,25 @@ def _normalize_label_token(value: Any) -> str:
 def normalize_hired_column(series: pd.Series) -> pd.Series:
     numeric_series = pd.to_numeric(series, errors="coerce")
     if numeric_series.notna().all():
+        positive_numeric = pd.to_numeric(pd.Series([positive_value]), errors="coerce").iloc[0]
+        if pd.notna(positive_numeric):
+            return numeric_series.apply(lambda value: 1 if float(value) == float(positive_numeric) else 0).astype(int)
         if not numeric_series.isin([0, 1]).all():
             invalid_values = sorted(
                 set(numeric_series[~numeric_series.isin([0, 1])].tolist())
             )[:5]
             raise ValueError(
-                "Column 'hired' must be binary. Supported values include "
+                "Outcome column must be binary. Supported values include "
                 "0/1, yes/no, true/false. "
                 f"Found unsupported numeric values: {invalid_values}"
             )
         return numeric_series.astype(int)
 
     normalized_tokens = series.map(_normalize_label_token)
+    positive_token = _normalize_label_token(positive_value)
     mapped = normalized_tokens.map(
         lambda token: 1
-        if token in POSITIVE_LABEL_TOKENS
+        if token in POSITIVE_LABEL_TOKENS or token == positive_token
         else 0
         if token in NEGATIVE_LABEL_TOKENS
         else np.nan
@@ -121,7 +128,7 @@ def normalize_hired_column(series: pd.Series) -> pd.Series:
     if mapped.isna().any():
         invalid_tokens = sorted(set(normalized_tokens[mapped.isna()].tolist()))[:5]
         raise ValueError(
-            "Column 'hired' must be binary. Supported values include "
+            "Outcome column must be binary. Supported values include "
             "0/1, yes/no, true/false, hired/rejected. "
             f"Found unsupported values: {invalid_tokens}"
         )
@@ -179,11 +186,16 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
-def encode_categorical_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, LabelEncoder]]:
+def encode_categorical_columns(
+    df: pd.DataFrame,
+    *,
+    label_column: str = LABEL_COLUMN,
+    protected_attribute: str | None = None,
+) -> tuple[pd.DataFrame, dict[str, LabelEncoder]]:
     encoded = df.copy()
     encoders: dict[str, LabelEncoder] = {}
     for column in encoded.columns:
-        if column == LABEL_COLUMN:
+        if column == label_column:
             continue
         if encoded[column].dtype == object:
             encoder = LabelEncoder()
@@ -199,13 +211,21 @@ def encode_categorical_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
     return encoded, encoders
 
 
-def build_binary_label_dataset(encoded_df: pd.DataFrame, labels: np.ndarray | None = None):
+def build_binary_label_dataset(
+    encoded_df: pd.DataFrame,
+    labels: np.ndarray | None = None,
+    *,
+    label_column: str = LABEL_COLUMN,
+    protected_attribute: str | None = None,
+):
     if not AIF360_AVAILABLE:
         return None
 
     dataset_df = encoded_df.copy()
     if labels is not None:
-        dataset_df[LABEL_COLUMN] = labels.astype(int)
+        dataset_df[label_column] = labels.astype(int)
+
+    protected_attr = protected_attribute or _protected_attribute_name()
 
     return BinaryLabelDataset(
         favorable_label=1,
@@ -311,6 +331,19 @@ def compute_fairness_metrics(
 ) -> dict[str, Any]:
     return _metricframe_payload(encoded_features, y_true, y_pred)
 
+def compute_fairness_metrics(
+    encoded_features: pd.DataFrame,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    *,
+    protected_attribute: str | None = None,
+) -> dict[str, Any]:
+    return _metricframe_payload(
+        encoded_features,
+        y_true,
+        y_pred,
+        protected_attribute=protected_attribute,
+    )
 
 def run_bias_detection(df: pd.DataFrame) -> dict[str, Any]:
     normalized_df = normalize_dataframe(df)
@@ -375,9 +408,14 @@ def run_bias_detection(df: pd.DataFrame) -> dict[str, Any]:
         )
     else:
         probabilities = predictions.astype(float)
-    # Baseline fairness should reflect observed hiring decisions in the uploaded dataset.
+
     observed_decisions = y.to_numpy()
-    metrics = compute_fairness_metrics(X, observed_decisions, observed_decisions)
+    metrics = compute_fairness_metrics(
+        X,
+        observed_decisions,
+        observed_decisions,
+        protected_attribute=protected_attribute,
+    )
 
     majority_values: dict[str, Any] = {}
     for attribute in COUNTERFACTUAL_PROTECTED_ATTRIBUTES:
@@ -395,4 +433,8 @@ def run_bias_detection(df: pd.DataFrame) -> dict[str, Any]:
         "probabilities": probabilities.astype(float),
         "feature_names": X.columns.tolist(),
         "majority_values": majority_values,
+        "label_column": label_column,
+        "protected_attributes": protected_candidates,
+        "protected_attribute": protected_attribute,
+        "outcome_positive_value": outcome_positive_value,
     }

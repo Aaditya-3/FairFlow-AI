@@ -13,11 +13,17 @@ function formatSize(bytes) {
   return `${(kilobytes / 1024).toFixed(2)} MB`;
 }
 
-function CSVUploader({ onUpload, uploading = false }) {
+function CSVUploader({
+  onUpload,
+  onFileSelected,
+  uploading = false,
+  domainLabel = "Hiring",
+  expectedColumns = []
+}) {
   const timerRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [progress, setProgress] = useState(0);
-  const [error, setError] = useState("");
+  const [error, setError] = useState({ message: "", missingColumns: [] });
 
   const animateProgress = () =>
     new Promise((resolve) => {
@@ -36,7 +42,7 @@ function CSVUploader({ onUpload, uploading = false }) {
   const beginUpload = useCallback(
     async (file) => {
       setSelectedFile(file);
-      setError("");
+      setError({ message: "", missingColumns: [] });
       setProgress(0);
       try {
         await Promise.all([animateProgress(), onUpload(file)]);
@@ -44,7 +50,18 @@ function CSVUploader({ onUpload, uploading = false }) {
       } catch (uploadError) {
         clearInterval(timerRef.current);
         setProgress(0);
-        setError(uploadError?.response?.data?.detail || "Upload failed. Please check the CSV and try again.");
+        const detail = uploadError?.response?.data?.detail;
+        if (detail && typeof detail === "object") {
+          setError({
+            message: detail.message || "Upload failed. Please check the CSV and try again.",
+            missingColumns: Array.isArray(detail.missing_columns) ? detail.missing_columns : []
+          });
+          return;
+        }
+        setError({
+          message: detail || uploadError?.message || "Upload failed. Please check the CSV and try again.",
+          missingColumns: []
+        });
       }
     },
     [onUpload]
@@ -53,14 +70,20 @@ function CSVUploader({ onUpload, uploading = false }) {
   const onDropAccepted = useCallback(
     (files) => {
       if (files[0]) {
-        beginUpload(files[0]);
+        setSelectedFile(files[0]);
+        setError({ message: "", missingColumns: [] });
+        setProgress(0);
+        onFileSelected?.(files[0]);
       }
     },
-    [beginUpload]
+    [onFileSelected]
   );
 
   const onDropRejected = useCallback(() => {
-    setError("Only .csv files are supported for bias audits.");
+    setError({
+      message: "Only .csv files are supported for bias audits.",
+      missingColumns: []
+    });
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -78,7 +101,7 @@ function CSVUploader({ onUpload, uploading = false }) {
       <div
         {...getRootProps()}
         className={`relative cursor-pointer rounded-[28px] border-2 border-dashed p-8 transition ${
-          error
+          error.message
             ? "border-red-300 bg-red-50"
             : isDragActive
               ? "border-amber bg-amber/10"
@@ -91,15 +114,20 @@ function CSVUploader({ onUpload, uploading = false }) {
             <UploadCloud className="h-7 w-7" />
           </div>
           <h3 className="mt-5 text-xl font-bold text-slate-900">
-            Drop your hiring CSV here or click to browse
+            Drop your {domainLabel.toLowerCase()} CSV here or click to browse
           </h3>
           <p className="mt-3 text-sm leading-6 text-slate-500">
-            Upload a candidate decision export to run bias detection, candidate explanations, and
-            mitigation analysis in one flow.
+            Upload a decision export to run bias detection, candidate explanations, and mitigation
+            analysis in one flow.
           </p>
           <div className="mt-5 rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
             Expected format: .csv
           </div>
+          {expectedColumns.length > 0 && (
+            <p className="mt-4 max-w-lg text-xs leading-6 text-slate-500">
+              Suggested columns: {expectedColumns.join(", ")}
+            </p>
+          )}
         </div>
       </div>
 
@@ -132,13 +160,31 @@ function CSVUploader({ onUpload, uploading = false }) {
               <span>{progress}%</span>
             </div>
           </div>
+
+          <div className="mt-5 flex justify-end">
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => beginUpload(selectedFile)}
+              className="rounded-2xl bg-navy px-4 py-2 text-sm font-semibold text-white transition hover:bg-navy-light disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {uploading ? "Uploading..." : "Start Upload"}
+            </button>
+          </div>
         </div>
       )}
 
-      {error && (
+      {error.message && (
         <div className="flex items-start gap-3 rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-red-700">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
-          <p className="text-sm leading-6">{error}</p>
+          <div className="text-sm leading-6">
+            <p>{error.message}</p>
+            {error.missingColumns.length > 0 && (
+              <p className="mt-2 font-semibold text-red-800">
+                Missing columns: {error.missingColumns.join(", ")}
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 # FairFlow AI
 
-FairFlow AI is a full-stack fairness auditing platform for hiring workflows. It lets teams upload hiring outcome CSVs, measure bias metrics, inspect candidate-level explanations, test counterfactual sensitivity, compare mitigation strategies, and export audit-ready PDF reports.
+FairFlow AI is a full-stack fairness auditing platform for AI-driven hiring, lending, and healthcare workflows. It lets teams upload decision outcome CSVs, measure bias metrics, inspect subject-level explanations, test counterfactual sensitivity, compare mitigation strategies, and export audit-ready PDF reports.
 
 The main application in this repository is the FastAPI + React project in `backend/` and `frontend/`. A separate prototype lives in `unbiased-ai-decision/` and is not required to run the main FairFlow AI app.
 
@@ -8,7 +8,7 @@ If you are looking for the Google-stack submission assets mentioned elsewhere in
 
 ## What the project does
 
-- Uploads hiring datasets and computes fairness metrics on observed outcomes
+- Uploads hiring, lending, and healthcare datasets and computes fairness metrics on observed outcomes
 - Trains a local model to generate candidate-level SHAP explanations
 - Runs protected-attribute counterfactual checks for individual candidates
 - Stores audits, candidates, mitigation results, memory records, and report certificates in PostgreSQL
@@ -52,9 +52,21 @@ FairFlow-AI/
 `-- unbiased-ai-decision/
 ```
 
+## Supported domains
+
+| Domain | Outcome column | Protected attributes | Sample file |
+| --- | --- | --- | --- |
+| Hiring | `hired` | `gender`, `ethnicity`, `age` | `sample_candidates.csv` |
+| Lending | `loan_approved` | `gender`, `race`, `age` | `sample_loan_applications.csv` |
+| Healthcare | `admitted` | `gender`, `race`, `age`, `insurance_type` | `sample_medical_admissions.csv` |
+
 ## Dataset format
 
-Uploads must be CSV files with these required columns:
+FairFlow now supports three preset schemas plus a custom mapping mode.
+
+### Hiring schema
+
+Required columns:
 
 - `name`
 - `gender`
@@ -69,7 +81,41 @@ Optional columns:
 - `skills`
 - `previous_companies`
 
-The repository includes [`sample_candidates.csv`](sample_candidates.csv) with 200 records so you can run the full workflow immediately.
+### Lending schema
+
+Required columns:
+
+- `applicant_id`
+- `gender`
+- `race`
+- `age`
+- `income`
+- `credit_score`
+- `loan_amount`
+- `employment_years`
+- `debt_to_income`
+- `loan_approved`
+
+### Healthcare schema
+
+Required columns:
+
+- `patient_id`
+- `gender`
+- `race`
+- `age`
+- `insurance_type`
+- `severity_score`
+- `wait_time_hours`
+- `prior_visits`
+- `distance_km`
+- `admitted`
+
+Sample datasets included in the repository:
+
+- [`sample_candidates.csv`](sample_candidates.csv)
+- [`sample_loan_applications.csv`](sample_loan_applications.csv)
+- [`sample_medical_admissions.csv`](sample_medical_admissions.csv)
 
 ## Quick start with Docker
 
@@ -211,6 +257,7 @@ Audit workflow:
 - `POST /audit/upload`
 - `GET /audit/list`
 - `GET /audit/{audit_id}`
+- `GET /domain/templates`
 
 Candidate review:
 

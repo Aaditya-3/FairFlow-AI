@@ -9,6 +9,7 @@ import Candidates from "./pages/Candidates";
 import Dashboard from "./pages/Dashboard";
 import LoginPage from "./pages/LoginPage";
 import Mitigate from "./pages/Mitigate";
+import Governance from "./pages/Governance";
 import RegisterPage from "./pages/RegisterPage";
 
 const getStoredToken = () =>
@@ -52,6 +53,8 @@ function App() {
           <Route path="/audit" element={<Audit />} />
           <Route path="/candidates/:auditId" element={<Candidates />} />
           <Route path="/mitigate/:auditId" element={<Mitigate />} />
+          <Route path="/governance" element={<Governance />} />
+          <Route path="/governance/:auditId" element={<Governance />} />
         </Route>
       </Routes>
     </>

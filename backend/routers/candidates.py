@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from uuid import UUID
 
 from database import get_db
+from domain_config import PRESET_DOMAIN_TEMPLATES
 from ml.bias_detector import run_bias_detection
 from ml.counterfactual import generate_counterfactual
 from models import Audit, Candidate, User
@@ -13,6 +14,11 @@ from utils import rebuild_audit_rows, serialize_candidate, to_serializable
 
 
 router = APIRouter()
+
+
+def _audit_domain_config(audit: Audit) -> dict:
+    default_config = PRESET_DOMAIN_TEMPLATES["hiring"].model_dump(mode="json")
+    return audit.domain_config or default_config
 
 
 def _get_authorized_audit(db: Session, audit_id: UUID, user_id) -> Audit:
@@ -103,13 +109,29 @@ def run_counterfactual(
     if candidate_index is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Candidate record is inconsistent.")
 
+    domain_config = _audit_domain_config(audit)
+    protected_attributes = domain_config.get("protected_attributes", ["gender"])
+    feature_columns = domain_config.get("feature_columns") or None
+    outcome_positive_value = domain_config.get("outcome_positive_value", 1)
+    outcome_column = domain_config.get("outcome_column", "hired")
+
     reconstructed_df = pd.DataFrame(rebuild_audit_rows(ordered_candidates))
-    detection_result = run_bias_detection(reconstructed_df)
+    resolved_outcome_column = outcome_column if outcome_column in reconstructed_df.columns else "hired"
+    detection_result = run_bias_detection(
+        reconstructed_df,
+        label_column=resolved_outcome_column,
+        protected_attributes=protected_attributes,
+        outcome_positive_value=outcome_positive_value,
+        feature_columns=feature_columns,
+    )
     counterfactual = generate_counterfactual(
         detection_result["model"],
         reconstructed_df.iloc[candidate_index].to_dict(),
         detection_result["label_encoders"],
         detection_result["majority_values"],
+        label_column=resolved_outcome_column,
+        protected_attributes=protected_attributes,
+        model_feature_names=detection_result.get("feature_names", []),
     )
 
     candidate.counterfactual_result = to_serializable(counterfactual)

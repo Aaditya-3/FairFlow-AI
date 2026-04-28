@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from agent.memory_store import store_memory
 from database import get_db
+from domain_config import PRESET_DOMAIN_TEMPLATES
 from ml.mitigator import apply_mitigations
 from ml.synthetic_patch import generate_synthetic_counterfactual_patch
 from models import Audit, AuditCertificate, User
@@ -44,6 +45,13 @@ def _stage_accuracy(y_true: list[int], predictions: list[int]) -> float:
     return round(matches / total, 4)
 
 
+def _audit_domain_config(audit: Audit) -> dict:
+    default_config = PRESET_DOMAIN_TEMPLATES["hiring"].model_dump(mode="json")
+    if not audit.domain_config:
+        return default_config
+    return audit.domain_config
+
+
 @router.post("/mitigate/{audit_id}", response_model=MitigationResponse)
 def mitigate_audit(
     audit_id: UUID,
@@ -55,7 +63,15 @@ def mitigate_audit(
     if not ordered_candidates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This audit does not contain candidates.")
 
+    domain_config = _audit_domain_config(audit)
+    protected_attributes = domain_config.get("protected_attributes", ["gender"])
+    protected_attribute = protected_attributes[0] if protected_attributes else "gender"
+    feature_columns = domain_config.get("feature_columns") or None
+    outcome_positive_value = domain_config.get("outcome_positive_value", 1)
+    outcome_column = domain_config.get("outcome_column", "hired")
+
     reconstructed_df = pd.DataFrame(rebuild_audit_rows(ordered_candidates))
+    resolved_outcome_column = outcome_column if outcome_column in reconstructed_df.columns else "hired"
     original_metrics = metric_payload(
         {
             "disparate_impact": audit.disparate_impact,
@@ -64,8 +80,15 @@ def mitigate_audit(
             "avg_odds_diff": audit.avg_odds_diff,
         }
     )
-    mitigation_result = apply_mitigations(reconstructed_df, original_metrics)
-    y_true = reconstructed_df["hired"].astype(int).tolist()
+    mitigation_result = apply_mitigations(
+        reconstructed_df,
+        original_metrics,
+        label_column=resolved_outcome_column,
+        protected_attribute=protected_attribute,
+        feature_columns=feature_columns,
+        outcome_positive_value=outcome_positive_value,
+    )
+    y_true = reconstructed_df[resolved_outcome_column].astype(int).tolist()
 
     final_predictions = mitigation_result.get("final_predictions", [])
     for index, candidate in enumerate(ordered_candidates):
@@ -140,10 +163,18 @@ def mitigate_with_synthetic_patch(
     if not ordered_candidates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This audit does not contain candidates.")
 
+    domain_config = _audit_domain_config(audit)
+    protected_attributes = domain_config.get("protected_attributes", ["gender"])
+    resolved_target_attribute = target_attribute or (protected_attributes[0] if protected_attributes else "gender")
+
     reconstructed_df = pd.DataFrame(rebuild_audit_rows(ordered_candidates))
     patch_result = generate_synthetic_counterfactual_patch(
         reconstructed_df,
-        target_attribute=target_attribute,
+        target_attribute=resolved_target_attribute,
+        decision_column=domain_config.get("outcome_column", "hired")
+        if domain_config.get("outcome_column", "hired") in reconstructed_df.columns
+        else "hired",
+        outcome_positive_value=domain_config.get("outcome_positive_value", 1),
     )
     metrics_before = metric_payload(patch_result["metrics_before"])
     metrics_after = metric_payload(patch_result["metrics_after"])
@@ -160,7 +191,7 @@ def mitigate_with_synthetic_patch(
         audit=audit,
         stage="synthetic_patch",
         metadata={
-            "target_attribute": target_attribute,
+            "target_attribute": resolved_target_attribute,
             "generated_rows": patch_result["generated_rows"],
             "fairness_lift": round(fairness_after - fairness_before, 2),
         },
@@ -171,7 +202,7 @@ def mitigate_with_synthetic_patch(
         "audit_id": audit.id,
         "engine": patch_result["engine"],
         "enabled": bool(patch_result["enabled"]),
-        "target_attribute": target_attribute,
+        "target_attribute": resolved_target_attribute,
         "generated_rows": int(patch_result["generated_rows"]),
         "metrics_before": metrics_before,
         "metrics_after": metrics_after,
@@ -189,6 +220,10 @@ def download_report(
     db: Session = Depends(get_db),
 ):
     audit = _get_audit_for_user(db, audit_id, current_user.id)
+    domain_config = _audit_domain_config(audit)
+    outcome_label = domain_config.get("outcome_label", "Hired")
+    subject_label = domain_config.get("subject_label", "Candidate")
+    protected_attributes = domain_config.get("protected_attributes", ["gender", "ethnicity"])
     raw_metrics = metric_payload(
         {
             "disparate_impact": audit.disparate_impact,
@@ -219,8 +254,8 @@ def download_report(
         [
             ["Dataset", audit.dataset_name],
             ["Created At", audit.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")],
-            ["Total Candidates (DP)", str(sanitized["total_candidates"])],
-            ["Flagged Candidates (DP)", str(sanitized["flagged_candidates"])],
+            [f"Total {subject_label}s (DP)", str(sanitized["total_candidates"])],
+            [f"Flagged {subject_label}s (DP)", str(sanitized["flagged_candidates"])],
             ["Bias Detected", "Yes" if audit.bias_detected else "No"],
             ["Mitigation Applied", "Yes" if audit.mitigation_applied else "No"],
             ["Differential Privacy Epsilon", f"{epsilon:.2f}"],
@@ -262,31 +297,23 @@ def download_report(
     metrics_table.setStyle(TableStyle(metric_style))
     story.extend([metrics_table, Spacer(1, 18)])
 
-    gender_rates = compute_group_hire_rates(list(audit.candidates), "gender")
-    ethnicity_rates = compute_group_hire_rates(list(audit.candidates), "ethnicity")
-    dp_gender_rows = [["Gender", "Hire Rate (DP)"]]
-    for group, value in sorted(gender_rates.items()):
-        dp_value = sanitize_metric(
-            value,
-            epsilon=epsilon,
-            sensitivity=1.0 / max(audit.total_candidates, 1),
-            lower=0.0,
-            upper=1.0,
-        )
-        dp_gender_rows.append([group, f"{dp_value:.4f}"])
+    group_rows: list[list[str]] = [["Attribute Group", f"{outcome_label} Rate (DP)"]]
+    for attribute in protected_attributes[:4]:
+        attribute_rates = compute_group_hire_rates(list(audit.candidates), attribute)
+        if not attribute_rates:
+            continue
+        group_rows.append([f"{attribute} (attribute)", ""])
+        for group, value in sorted(attribute_rates.items()):
+            dp_value = sanitize_metric(
+                value,
+                epsilon=epsilon,
+                sensitivity=1.0 / max(audit.total_candidates, 1),
+                lower=0.0,
+                upper=1.0,
+            )
+            group_rows.append([str(group), f"{dp_value:.4f}"])
 
-    dp_ethnicity_rows = [["Ethnicity", "Hire Rate (DP)"]]
-    for group, value in sorted(ethnicity_rates.items()):
-        dp_value = sanitize_metric(
-            value,
-            epsilon=epsilon,
-            sensitivity=1.0 / max(audit.total_candidates, 1),
-            lower=0.0,
-            upper=1.0,
-        )
-        dp_ethnicity_rows.append([group, f"{dp_value:.4f}"])
-
-    flagged_table = Table(dp_gender_rows + [["", ""], *dp_ethnicity_rows], repeatRows=1, colWidths=[190, 140])
+    flagged_table = Table(group_rows, repeatRows=1, colWidths=[190, 140])
     flagged_table.setStyle(
         TableStyle(
             [

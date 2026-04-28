@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from agent.memory_store import store_memory
 from database import get_db
+from domain_config import PRESET_DOMAIN_TEMPLATES
 from ml.causal_tcav import run_causal_tcav_analysis
 from models import Audit, User
 from routers.auth import get_current_user
@@ -14,6 +15,11 @@ from utils import rebuild_audit_rows
 
 
 router = APIRouter()
+
+
+def _audit_domain_config(audit: Audit) -> dict:
+    default_config = PRESET_DOMAIN_TEMPLATES["hiring"].model_dump(mode="json")
+    return audit.domain_config or default_config
 
 
 def _get_audit_for_user(db: Session, audit_id: UUID, user_id) -> Audit:
@@ -41,8 +47,17 @@ def run_deep_inspection(
             detail="Deep inspection requires at least one candidate record.",
         )
 
+    domain_config = _audit_domain_config(audit)
+    protected_priority = domain_config.get("protected_attributes", ["gender", "ethnicity"])
+    outcome_column = domain_config.get("outcome_column", "hired")
+
     dataframe = pd.DataFrame(rebuild_audit_rows(list(audit.candidates)))
-    inspection = run_causal_tcav_analysis(dataframe)
+    resolved_outcome_column = outcome_column if outcome_column in dataframe.columns else "hired"
+    inspection = run_causal_tcav_analysis(
+        dataframe,
+        outcome_column=resolved_outcome_column,
+        protected_priority=protected_priority,
+    )
     top_proxy = inspection["proxy_findings"][0]["feature"] if inspection["proxy_findings"] else "none"
 
     store_memory(
@@ -62,4 +77,3 @@ def run_deep_inspection(
         "audit_id": audit.id,
         **inspection,
     }
-
