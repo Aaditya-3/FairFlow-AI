@@ -10,7 +10,7 @@ class ApiService {
 
   final String baseUrl = const String.fromEnvironment(
     'FLUTTER_API_BASE_URL',
-    defaultValue: 'http://localhost:8080',
+    defaultValue: 'https://fairflow-ai-1056539416381.asia-south1.run.app',
   );
 
   Future<Map<String, dynamic>> fetchHealth() async {
